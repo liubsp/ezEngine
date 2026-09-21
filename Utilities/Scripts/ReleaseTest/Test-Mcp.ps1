@@ -286,10 +286,9 @@ try
 			throw "The editor is still running 120s after app_quit."
 		}
 
-		if (-not (Wait-ForCondition -TimeoutSeconds 60 -Condition { (@(Get-LeftoverEzProcesses -BinDir $binDir)).Count -eq 0 }))
+		if (-not (Wait-ForCondition -TimeoutSeconds 60 -Condition { $p.EzOwner.ActiveProcessCount -eq 0 }))
 		{
-			$names = (@(Get-LeftoverEzProcesses -BinDir $binDir) | ForEach-Object { $_.ProcessName }) -join ", "
-			throw "These processes survived the editor: $names"
+			throw "Owned descendants survived the editor."
 		}
 
 		return "no processes left behind"
@@ -298,11 +297,12 @@ try
 	# the editor's whole log is only readable once it has exited, so this is the point where it can be
 	# written - the 'finally' block below would otherwise be the only place, and it never sees a
 	# successful shutdown
+	Stop-EzProcessTree -Process $editorProcess
 	Save-DetachedProcessOutput -Process $editorProcess -LogFile $editorLog
 
 	# only drop the handle once the process is really gone, otherwise the cleanup in 'finally' would
 	# have nothing left to kill after a failed shutdown
-	if ($editorProcess.HasExited) { $editorProcess = $null }
+	if ($editorProcess.HasExited) { $editorProcess.EzOwner.Dispose(); $editorProcess = $null }
 
 	# D6 equivalent for the player: the same server, but hosted by the game
 	$playerPort = $EditorPort + 10
@@ -360,26 +360,22 @@ try
 			return "exit code $($p.ExitCode)"
 		}
 
+		Stop-EzProcessTree -Process $playerProcess
 		Save-DetachedProcessOutput -Process $playerProcess -LogFile $playerLog
 
-		if ($playerProcess.HasExited) { $playerProcess = $null }
+		if ($playerProcess.HasExited) { $playerProcess.EzOwner.Dispose(); $playerProcess = $null }
 	}
 }
 finally
 {
 	# a failed check must not leave a headless editor running on the machine
-	Stop-EzProcessTree -Process $editorProcess
-	Stop-EzProcessTree -Process $playerProcess
-
-	# only reached for the processes that were still alive above; the clean shutdown paths write their
-	# log right after the corresponding check, because that is where they give the handle up
-	Save-DetachedProcessOutput -Process $editorProcess -LogFile $editorLog
-	Save-DetachedProcessOutput -Process $playerProcess -LogFile $playerLog
-
-	@(Get-LeftoverEzProcesses -BinDir $binDir) | ForEach-Object {
-		Write-Host "Killing leftover process $($_.ProcessName) ($($_.Id))."
-		Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+	$cleanupErrors = @()
+	foreach ($entry in @(@($editorProcess, $editorLog), @($playerProcess, $playerLog))) {
+		try { Stop-EzProcessTree -Process $entry[0] } catch { $cleanupErrors += $_ }
+		try { Save-DetachedProcessOutput -Process $entry[0] -LogFile $entry[1] } catch { $cleanupErrors += $_ }
+		try { if ($null -ne $entry[0]) { $entry[0].EzOwner.Dispose() } } catch { $cleanupErrors += $_ }
 	}
+	if ($cleanupErrors.Count) { throw ($cleanupErrors -join "`n") }
 }
 
 exit (Save-TestResults)

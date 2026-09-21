@@ -267,12 +267,16 @@ function Update-Summary
 	return [PSCustomObject]@{ All = $all; Failed = $failed; Skipped = $skipped; SummaryFile = $summaryFile }
 }
 
+$groupFailures = @()
 foreach ($group in $groups)
 {
 	$sw = [System.Diagnostics.Stopwatch]::StartNew()
+	$groupFailure = $null
 
 	try
 	{
+		# A leaf's exit status is independent of its JSON. Do not inherit an earlier native exit.
+		$global:LASTEXITCODE = 0
 		switch ($group)
 		{
 			"Tools"
@@ -293,14 +297,40 @@ foreach ($group in $groups)
 				& "$PSScriptRoot\Test-Mcp.ps1" -SdkDir $SdkDir -OutputDir $OutputDir -BinDir $BinDir
 			}
 		}
+		$groupExitCode = $LASTEXITCODE
+		$groupFile = Join-Path $OutputDir "Results.$group.json"
+		$records = @()
+		if (Test-Path $groupFile)
+		{
+			$parsed = Get-Content $groupFile -Raw | ConvertFrom-Json
+			$records = @($parsed)
+		}
+		if ($groupExitCode -ne 0 -and @($records | Where-Object Status -eq 'FAIL').Count -eq 0)
+		{
+			$groupFailure = "Group exited with code $groupExitCode without recording a failed check."
+		}
+		elseif ($records.Count -eq 0)
+		{
+			$groupFailure = 'Selected group returned no results.'
+		}
 	}
 	catch
 	{
-		# a group that dies half way still leaves its results file behind, the summary reports what it got
-		Write-Host "Group '$group' aborted: $($_.Exception.Message)" -ForegroundColor Red
+		$groupFailure = "Group aborted: $($_.Exception.Message)"
 	}
 
 	$sw.Stop()
+	if ($null -ne $groupFailure)
+	{
+		# Keep runner failures separate from leaf output; never overwrite useful partial checks.
+		$groupFailures += [PSCustomObject]@{
+			Group = $group; Name = 'Group completion'; Status = 'FAIL'
+			Duration = [math]::Round($sw.Elapsed.TotalSeconds, 1); Message = $groupFailure; Artifact = ''
+		}
+		ConvertTo-Json -InputObject @($groupFailures) -Depth 4 |
+			Set-Content -Path (Join-Path $OutputDir 'Results.Runner.json') -Encoding UTF8
+		Write-Host "Group '$group': $groupFailure" -ForegroundColor Red
+	}
 	Write-Host ("Group '{0}' took {1:N0}s." -f $group, $sw.Elapsed.TotalSeconds)
 
 	$result = Update-Summary

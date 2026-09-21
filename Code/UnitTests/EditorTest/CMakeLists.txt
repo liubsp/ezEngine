@@ -17,6 +17,7 @@ target_link_libraries(${PROJECT_NAME}
   EditorFramework
   EditorEngineProcessFramework
   EditorPluginScene
+  Mcp
 )
 
 add_dependencies(${PROJECT_NAME}
@@ -27,6 +28,7 @@ add_dependencies(${PROJECT_NAME}
   EditorPluginParticle
   EditorPluginProcGen
   EditorPluginJolt
+  EditorPluginMcp
   EditorPluginRmlUi
   EditorPluginMiniAudio
   ParticlePlugin

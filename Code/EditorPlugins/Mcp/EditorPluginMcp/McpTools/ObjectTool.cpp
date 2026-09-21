@@ -258,6 +258,32 @@ namespace
     {
       const ezVariant::Type::Enum targetType = pPropType->GetVariantType();
 
+      // JSON represents UUIDs as strings, but ezVariant does not convert strings to UUIDs.
+      // Validate before starting a command so malformed input cannot assert or change history.
+      if (targetType == ezVariant::Type::Uuid && input.IsString())
+      {
+        ezUuid guid;
+        const ezString sValue = input.ConvertTo<ezString>();
+        // The UUID utility checks the separators, not the hexadecimal digits. Check those before
+        // conversion as well: accepting a misspelled reference would silently bind another object.
+        bool bValidDigits = true;
+        for (ezUInt32 i = 2; i < sValue.GetElementCount() && i < 38; ++i)
+        {
+          if (i == 10 || i == 15 || i == 20 || i == 25)
+            continue;
+          if (ezConversionUtils::HexCharacterToIntValue(sValue.GetData()[i]) < 0)
+            bValidDigits = false;
+        }
+        if (!bValidDigits || ezConversionUtils::TryConvertStringToUuid(sValue, guid).Failed())
+        {
+          out_sError.SetFormat("The value given for '{}' is not a valid UUID.", pProp->GetPropertyName());
+          return EZ_FAILURE;
+        }
+
+        out_value = guid;
+        return EZ_SUCCESS;
+      }
+
       // A vector or colour arrives as the object it was reported as ({"x":1,"y":2,"z":3}) or as an
       // array, and ezVariant converts neither. Without this, reading a position and writing it back -
       // the most ordinary thing to do with a transform - fails on the value this tool itself produced.

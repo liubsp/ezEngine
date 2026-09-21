@@ -5,6 +5,7 @@
 
 #include <Foundation/Utilities/CommandLineOptions.h>
 #include <GuiFoundation/UIServices/UIServices.moc.h>
+#include <QTimer>
 
 /// The port to listen on.
 ///
@@ -28,10 +29,14 @@ static ezCommandLineOptionInt s_opt_McpPort("_Mcp", "-editor-mcpport",
   7391, 1024, 0xFFFF);
 
 static ezMcpServer* s_pServer = nullptr;
-static ezEventSubscriptionID s_TickSubscription = 0;
+static QTimer* s_pRequestTimer = nullptr;
+static bool s_bProcessingRequest = false;
+static bool s_bServerStatePending = false;
+static ezUInt16 s_uiRequestedPort = 0;
 
 static void ToolsProjectEventHandler(const ezToolsProjectEvent& e);
-static void TickEventHandler(const ezQtUiServices::TickEvent& e);
+static void ApplyServerState();
+static void ProcessRequests();
 
 /// \brief Runs one tool call inside the editor's unattended mode, and turns a failed assert into an error.
 ///
@@ -74,6 +79,14 @@ static void ExecuteWrapper(ezStringView sToolName, ezMcpToolResult& ref_result, 
 
 void OnLoadPlugin()
 {
+  // A separate Qt event, not a TickEvent handler: tools can create or destroy document windows,
+  // which subscribe to that event. A single-shot timer also stays disarmed while a tool runs a
+  // nested event loop, so the still-pending transport request cannot be executed recursively.
+  s_pRequestTimer = new QTimer();
+  s_pRequestTimer->setSingleShot(true);
+  s_pRequestTimer->setInterval(16);
+  QObject::connect(s_pRequestTimer, &QTimer::timeout, s_pRequestTimer, &ProcessRequests);
+
   // s_Events is static, so this works before any project has been opened
   ezToolsProject::s_Events.AddEventHandler(ToolsProjectEventHandler);
 
@@ -88,11 +101,13 @@ void OnUnloadPlugin()
 {
   ezToolsProject::s_Events.RemoveEventHandler(ToolsProjectEventHandler);
 
-  if (s_TickSubscription != 0)
-  {
-    ezQtUiServices::s_TickEvent.RemoveEventHandler(s_TickSubscription);
-    s_TickSubscription = 0;
-  }
+  // Editor plugins unload after the editor event loop has returned, not from inside their own
+  // tool calls. Destroy the timer/context first to remove any pending Qt callback before unload.
+  EZ_ASSERT_DEV(!s_bProcessingRequest, "Cannot unload the editor MCP plugin during a tool call.");
+  delete s_pRequestTimer;
+  s_pRequestTimer = nullptr;
+  s_bServerStatePending = false;
+  s_uiRequestedPort = 0;
 
   EZ_DEFAULT_DELETE(s_pServer);
 
@@ -110,44 +125,51 @@ EZ_PLUGIN_ON_UNLOADED()
   OnUnloadPlugin();
 }
 
-static void TickEventHandler(const ezQtUiServices::TickEvent& e)
+static void ProcessRequests()
 {
-  // BeforeFrame, not StartFrame: StartFrame is only broadcast when some handler asked for a frame to be
-  // drawn, so an editor with nothing to redraw would never reach it and every tool call would hang.
-  // BeforeFrame is driven by a plain timer and always fires. It is also outside the frame proper, which
-  // is closer to where the Qt socket callback used to run a tool call than the middle of a redraw is.
-  if (e.m_Type != ezQtUiServices::TickEvent::Type::BeforeFrame)
+  // Asset transforms pump Qt events while their document is still on the call stack. A tool
+  // must not close or mutate that document from the progress dialog's nested event processing.
+  if (ezQtEditorApp::GetSingleton()->IsProgressBarProcessingEvents())
+  {
+    s_pRequestTimer->start();
     return;
+  }
 
-  // The transport reads requests on its own thread but never answers one there: a tool call may touch
-  // any part of the editor, none of which is thread safe. This is where the answering happens, so if
-  // this stops being called, clients simply wait.
+  EZ_ASSERT_DEV(!s_bProcessingRequest, "MCP requests must not be dispatched recursively.");
+  s_bProcessingRequest = true;
   if (s_pServer != nullptr)
   {
     s_pServer->ProcessPendingRequests();
   }
+  s_bProcessingRequest = false;
+
+  ApplyServerState();
+  if (s_pServer != nullptr && s_uiRequestedPort != 0)
+    s_pRequestTimer->start();
 }
 
-static void ToolsProjectEventHandler(const ezToolsProjectEvent& e)
+static void ApplyServerState()
 {
-  // the server is tied to the open project, because everything it will eventually expose is
-  // project specific
+  if (!s_bServerStatePending || s_bProcessingRequest)
+    return;
 
-  if (e.m_Type == ezToolsProjectEvent::Type::ProjectOpened)
+  s_bServerStatePending = false;
+  s_pRequestTimer->stop();
+  if (s_uiRequestedPort == 0)
+  {
+    if (s_pServer != nullptr)
+      s_pServer->Stop();
+  }
+  else
   {
     if (s_pServer == nullptr)
     {
       s_pServer = EZ_DEFAULT_NEW(ezMcpServer, "ezEditor");
     }
 
-    const ezUInt16 uiPort = static_cast<ezUInt16>(s_opt_McpPort.GetOptionValue(ezCommandLineOption::LogMode::FirstTimeIfSpecified));
-
-    if (s_pServer->Start(uiPort).Succeeded())
+    if (s_pServer->Start(s_uiRequestedPort).Succeeded())
     {
-      if (s_TickSubscription == 0)
-      {
-        s_TickSubscription = ezQtUiServices::s_TickEvent.AddEventHandler(&TickEventHandler);
-      }
+      s_pRequestTimer->start();
     }
     else
     {
@@ -156,15 +178,27 @@ static void ToolsProjectEventHandler(const ezToolsProjectEvent& e)
       // another editor already holding the port.
       ezLog::Warning("MCP: The server could not listen on port {}. This editor is not reachable through MCP. Another editor may already "
                      "be using that port - pass a different '-editor-mcpport'.",
-        uiPort);
+        s_uiRequestedPort);
+      s_uiRequestedPort = 0;
     }
   }
+}
 
-  if (e.m_Type == ezToolsProjectEvent::Type::ProjectClosing)
+static void ToolsProjectEventHandler(const ezToolsProjectEvent& e)
+{
+  if (e.m_Type == ezToolsProjectEvent::Type::ProjectOpened)
   {
-    if (s_pServer != nullptr)
-    {
-      s_pServer->Stop();
-    }
+    s_uiRequestedPort = static_cast<ezUInt16>(s_opt_McpPort.GetOptionValue(ezCommandLineOption::LogMode::FirstTimeIfSpecified));
   }
+  else if (e.m_Type == ezToolsProjectEvent::Type::ProjectClosing)
+  {
+    s_uiRequestedPort = 0;
+  }
+  else
+    return;
+
+  // Stop joins the transport thread, whose stack owns the current request/response. A tool can
+  // close or switch projects; postpone Stop/Start until its handler has returned to the transport.
+  s_bServerStatePending = true;
+  ApplyServerState();
 }

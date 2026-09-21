@@ -50,6 +50,9 @@ function global:Add-TestResult
 	if ($DurationSeconds -gt 0) { $line += " ({0:N1}s)" -f $DurationSeconds }
 	if ($Message) { $line += " - $Message" }
 	Write-Host $line -ForegroundColor $color
+	# A later launch or cleanup can throw before Save-TestResults. Persist completed checks as
+	# they arrive so the suite can retain them alongside its group-aborted failure record.
+	Write-TestResultsFile
 }
 
 # Runs a script block, turns an exception or a $false return value into a FAIL result.
@@ -101,11 +104,16 @@ function global:Invoke-TestCheck
 	}
 }
 
-function global:Save-TestResults
+function global:Write-TestResultsFile
 {
 	$file = Join-Path $script:TestOutputDir ("Results.{0}.json" -f $script:TestGroup)
 	# an empty array must still produce '[]', hence the array subexpression
 	ConvertTo-Json -InputObject @($script:TestResults) -Depth 4 | Set-Content -Path $file -Encoding UTF8
+}
+
+function global:Save-TestResults
+{
+	Write-TestResultsFile
 
 	$failed = @($script:TestResults | Where-Object { $_.Status -eq "FAIL" }).Count
 	Write-Host ("{0}: {1} checks, {2} failed" -f $script:TestGroup, $script:TestResults.Count, $failed)
@@ -188,17 +196,8 @@ function global:ConvertTo-EzArgumentString
 	}) -join ' '
 }
 
-# Kills a process and everything it spawned.
-# Process.Kill(bool entireProcessTree) is not used: that overload only exists on .NET Core, while the
-# release test runs under Windows PowerShell 5.1 / .NET Framework, where it throws MethodNotFound.
-# Stop-Process does not walk the tree either, so taskkill does it.
-function global:Stop-ProcessTreeById
-{
-	param([int]$Id)
-
-	# taskkill reports 'process not found' on stderr for an already dead process, which is not an error here
-	try { & taskkill.exe /PID $Id /T /F 2>&1 | Out-Null } catch { }
-}
+# Retain this path when dot-sourced: callers need not run from the script directory.
+$script:OwnedProcessSource = Join-Path $PSScriptRoot 'OwnedProcess.cs'
 
 # Reads an already started ReadToEndAsync task, but never waits longer than TimeoutSeconds.
 # The task only completes once every handle on the pipe is closed, and a surviving grandchild process
@@ -227,43 +226,27 @@ function global:Invoke-EzProcess
 		[string]$WorkingDirectory = "",
 		[int]$TimeoutSeconds = 600)
 
-	$psi = [System.Diagnostics.ProcessStartInfo]::new()
-	$psi.FileName = $Exe
-	$psi.RedirectStandardOutput = $true
-	$psi.RedirectStandardError = $true
-	$psi.UseShellExecute = $false
-	$psi.CreateNoWindow = $true
-	if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
-	$psi.Arguments = ConvertTo-EzArgumentString -Arguments $Arguments
-
-	$proc = [System.Diagnostics.Process]::new()
-	$proc.StartInfo = $psi
+	$proc = Start-EzProcessDetached -Exe $Exe -Arguments $Arguments -WorkingDirectory $WorkingDirectory
 
 	$sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 	try
 	{
-		$proc.Start() | Out-Null
-
-		# read both streams asynchronously, otherwise a full pipe buffer deadlocks the child
-		$stdOutTask = $proc.StandardOutput.ReadToEndAsync()
-		$stdErrTask = $proc.StandardError.ReadToEndAsync()
-
 		$timedOut = $false
 
 		if (-not $proc.WaitForExit($TimeoutSeconds * 1000))
 		{
 			$timedOut = $true
-			Stop-ProcessTreeById -Id $proc.Id
-			$proc.WaitForExit(10000) | Out-Null
 		}
+		# Root exit does not imply descendant exit. Close the owned job before draining output.
+		Stop-EzProcessTree -Process $proc
 
 		$sw.Stop()
 
 		return [PSCustomObject]@{
 			ExitCode = if ($timedOut) { -999 } else { $proc.ExitCode }
-			StdOut   = Get-StreamTaskResult -Task $stdOutTask -StreamName "stdout"
-			StdErr   = Get-StreamTaskResult -Task $stdErrTask -StreamName "stderr"
+			StdOut   = Get-StreamTaskResult -Task $proc.EzStdOutTask -StreamName "stdout"
+			StdErr   = Get-StreamTaskResult -Task $proc.EzStdErrTask -StreamName "stderr"
 			Duration = $sw.Elapsed.TotalSeconds
 			TimedOut = $timedOut
 		}
@@ -271,7 +254,7 @@ function global:Invoke-EzProcess
 	finally
 	{
 		$sw.Stop()
-		$proc.Dispose()
+		$proc.EzOwner.Dispose()
 	}
 }
 
@@ -279,27 +262,17 @@ function global:Start-EzProcessDetached
 {
 	param([string]$Exe, [string[]]$Arguments, [string]$WorkingDirectory = "")
 
-	# Start-Process is not used here: it concatenates arguments without quoting, so an argument
-	# containing a space (e.g. the path of the 'Testing Chambers' sample) arrives as two arguments.
-	$psi = [System.Diagnostics.ProcessStartInfo]::new()
-	$psi.FileName = $Exe
-	$psi.UseShellExecute = $false
-	# the applications write their whole log to stdout, which would otherwise end up in the console
-	# of the test run; it is captured and can be written to a file with Save-DetachedProcessOutput
-	$psi.RedirectStandardOutput = $true
-	$psi.RedirectStandardError = $true
-	if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
-	$psi.Arguments = ConvertTo-EzArgumentString -Arguments $Arguments
-
-	$proc = [System.Diagnostics.Process]::new()
-	$proc.StartInfo = $psi
-	$proc.Start() | Out-Null
-
-	# the pipes have to be drained, a full buffer would block the child process
-	Add-Member -InputObject $proc -NotePropertyName "EzStdOutTask" -NotePropertyValue $proc.StandardOutput.ReadToEndAsync()
-	Add-Member -InputObject $proc -NotePropertyName "EzStdErrTask" -NotePropertyValue $proc.StandardError.ReadToEndAsync()
-
-	return $proc
+	if (-not ('EzReleaseTests.OwnedProcess' -as [type])) { Add-Type -Path $script:OwnedProcessSource }
+	$owner = [EzReleaseTests.OwnedProcess]::Start($Exe, (ConvertTo-EzArgumentString -Arguments $Arguments), $WorkingDirectory)
+	try
+	{
+		$proc = $owner.Process
+		Add-Member -InputObject $proc -NotePropertyName 'EzOwner' -NotePropertyValue $owner
+		Add-Member -InputObject $proc -NotePropertyName 'EzStdOutTask' -NotePropertyValue $owner.StdOut
+		Add-Member -InputObject $proc -NotePropertyName 'EzStdErrTask' -NotePropertyValue $owner.StdErr
+		return $proc
+	}
+	catch { $owner.Dispose(); throw }
 }
 
 # Writes what a detached process has printed so far to a file. Only returns anything useful once
@@ -310,13 +283,9 @@ function global:Save-DetachedProcessOutput
 
 	if ($null -eq $Process -or -not $Process.HasExited) { return }
 
-	try
-	{
-		$out = Get-StreamTaskResult -Task $Process.EzStdOutTask -StreamName "stdout"
-		$err = Get-StreamTaskResult -Task $Process.EzStdErrTask -StreamName "stderr"
-		Set-Content -Path $LogFile -Value ($out + "`n" + $err) -Encoding UTF8
-	}
-	catch { }
+	$out = Get-StreamTaskResult -Task $Process.EzStdOutTask -StreamName "stdout"
+	$err = Get-StreamTaskResult -Task $Process.EzStdErrTask -StreamName "stderr"
+	Set-Content -Path $LogFile -Value ($out + "`n" + $err) -Encoding UTF8
 }
 
 function global:Stop-EzProcessTree
@@ -325,16 +294,8 @@ function global:Stop-EzProcessTree
 
 	if ($null -eq $Process) { return }
 
-	try
-	{
-		if (-not $Process.HasExited)
-		{
-			# the editor spawns an engine process, killing only the parent would leave it behind
-			Stop-ProcessTreeById -Id $Process.Id
-			$Process.WaitForExit(10000) | Out-Null
-		}
-	}
-	catch { }
+	if (-not $Process.PSObject.Properties['EzOwner']) { throw 'Cannot clean up an unowned process tree.' }
+	$Process.EzOwner.Stop()
 }
 
 # Waits until $Condition returns $true. Polls instead of sleeping for a fixed duration,
@@ -352,20 +313,6 @@ function global:Wait-ForCondition
 	}
 
 	return $false
-}
-
-function global:Get-LeftoverEzProcesses
-{
-	param([string]$BinDir)
-
-	$names = @("ezEditor", "ezEditorEngineProcess", "ezEditorProcessor", "ezPlayer")
-
-	# a prefix comparison, not -like: a '[' anywhere in the path would be a wildcard character there
-	$prefix = (Join-Path $BinDir "")
-
-	return @(Get-Process -Name $names -ErrorAction SilentlyContinue | Where-Object {
-		try { $_.Path -and $_.Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }
-	})
 }
 
 # --------------------------------------------------------------------------------------

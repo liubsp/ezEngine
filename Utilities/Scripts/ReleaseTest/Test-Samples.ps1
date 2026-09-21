@@ -331,8 +331,11 @@ if ($IncludeStandalone)
 			Remove-Variable -Name startedProcess -Scope Script
 		}
 
-		Stop-EzProcessTree -Process $proc
-		Save-DetachedProcessOutput -Process $proc -LogFile $logFile
+		try { Stop-EzProcessTree -Process $proc }
+		finally {
+			try { Save-DetachedProcessOutput -Process $proc -LogFile $logFile }
+			finally { if ($null -ne $proc) { $proc.EzOwner.Dispose() } }
+		}
 	}
 }
 

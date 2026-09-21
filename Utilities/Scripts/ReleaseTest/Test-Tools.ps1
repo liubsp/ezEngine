@@ -122,18 +122,8 @@ foreach ($tool in $guiTools)
 		Remove-Variable -Name startedProcess -Scope Script
 	}
 
-	Stop-EzProcessTree -Process $proc
-}
-
-# the editor starts a separate engine process, which must not survive the editor
-$leftovers = @(Get-LeftoverEzProcesses -BinDir $binDir)
-
-if ($leftovers.Count -gt 0)
-{
-	# they were killed hard above, so a leftover engine process is expected here and only cleaned up,
-	# not reported as a failure - the clean shutdown case is covered by Test-Mcp.ps1
-	Write-Host "Cleaning up $($leftovers.Count) leftover process(es)."
-	$leftovers | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+	try { Stop-EzProcessTree -Process $proc }
+	finally { if ($null -ne $proc) { $proc.EzOwner.Dispose() } }
 }
 
 exit (Save-TestResults)
