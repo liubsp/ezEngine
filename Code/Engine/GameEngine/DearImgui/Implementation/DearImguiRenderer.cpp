@@ -1,6 +1,7 @@
 #include <GameEngine/GameEnginePCH.h>
 
 #ifdef BUILDSYSTEM_ENABLE_IMGUI_SUPPORT
+#  include <Foundation/Types/ScopeExit.h>
 
 #  include <Core/World/World.h>
 #  include <Foundation/IO/TypeVersionContext.h>
@@ -35,6 +36,8 @@ ezImguiExtractor::ezImguiExtractor(const char* szName)
 
 void ezImguiExtractor::Extract(const ezView& view, const ezDynamicArray<const ezGameObject*>& visibleObjects, ezExtractedRenderData& ref_extractedRenderData)
 {
+  ImGui::SetCurrentContext(nullptr);
+  EZ_SCOPE_EXIT(ImGui::SetCurrentContext(nullptr));
   ezImgui* pImGui = ezImgui::GetSingleton();
   if (pImGui == nullptr)
   {
@@ -43,23 +46,23 @@ void ezImguiExtractor::Extract(const ezView& view, const ezDynamicArray<const ez
 
   {
     EZ_LOCK(pImGui->m_ViewToContextTableMutex);
-    ezImgui::Context context;
-    if (!pImGui->m_ViewToContextTable.TryGetValue(view.GetHandle(), context))
+    ezImgui::Context* pContext = nullptr;
+    if (!pImGui->m_ViewToContextTable.TryGetValue(view.GetHandle(), pContext))
     {
       // No context for this view
       return;
     }
 
     ezUInt64 uiCurrentFrameCounter = ezRenderWorld::GetFrameCounter();
-    if (context.m_uiFrameBeginCounter != uiCurrentFrameCounter)
+    if (pContext->m_uiFrameBeginCounter != uiCurrentFrameCounter)
     {
       // Nothing was rendered with ImGui this frame
       return;
     }
 
-    context.m_uiFrameRenderCounter = uiCurrentFrameCounter;
+    pContext->m_uiFrameRenderCounter = uiCurrentFrameCounter;
 
-    ImGui::SetCurrentContext(context.m_pImGuiContext);
+    ImGui::SetCurrentContext(pContext->m_pImGuiContext);
   }
 
   ImGui::Render();

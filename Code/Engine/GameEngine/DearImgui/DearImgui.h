@@ -24,8 +24,8 @@ using ezImguiConfigStyleCallback = ezDelegate<void(ImGuiStyle&)>;
 
 /// \brief Singleton class through which one can control the third-party library 'Dear Imgui'
 ///
-/// Instance has to be manually created and destroyed. Do this for example in ezGameState::OnActivation()
-/// and ezGameState::OnDeactivation().
+/// Create the singleton when needed, or reuse an existing one. Deleting a view releases only that
+/// view's context. Do not destroy a borrowed singleton; high-level system shutdown cleans it up.
 /// You need to call SetCurrentContextForView before you can use the Imgui functions directly.
 /// E.g. 'ImGui::Text("Hello, world!");'
 /// To prevent Imgui from using mouse and keyboard input (but still do rendering) use SetPassInputToImgui().
@@ -42,7 +42,11 @@ public:
     ezImguiConfigStyleCallback configStyleCallback = ezImguiConfigStyleCallback());
   ~ezImgui();
 
-  /// \brief Sets the ImGui context for the given view
+  /// \brief Binds the view's context for an immediate UI batch.
+  /// The caller must clear the thread-local binding with ImGui::SetCurrentContext(nullptr) on every
+  /// exit from that batch and rebind for each later batch. Do not retain context or draw-data pointers.
+  /// View deletion and singleton destruction require joined UI/extraction work; the table mutex alone
+  /// does not protect external ImGui calls. An invalid view leaves the binding null.
   void SetCurrentContextForView(const ezViewHandle& hView);
 
   /// \brief Returns the value that was passed to BeginFrame(). Useful for positioning UI elements.
@@ -100,6 +104,7 @@ public:
 private:
   friend class ezImguiExtractor;
   friend class ezImguiRenderer;
+  friend class ezImguiLifetimeTest;
 
   using ezImGuiTextureIdData = ezGenericId<16, 16>;
 
@@ -124,6 +129,7 @@ private:
   ImGuiContext* CreateContext();
   void BeginFrame(const ezViewHandle& hView);
   void GameApplicationEventHandler(const ezGameApplicationExecutionEvent& e);
+  void ViewDeletedEventHandler(ezView* pView);
 
   ezProxyAllocator m_Allocator;
 

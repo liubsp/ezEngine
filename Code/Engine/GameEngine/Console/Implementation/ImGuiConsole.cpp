@@ -1,6 +1,7 @@
 #include <GameEngine/GameEnginePCH.h>
 
 #ifdef BUILDSYSTEM_ENABLE_IMGUI_SUPPORT
+#  include <Foundation/Types/ScopeExit.h>
 
 #  include <GameEngine/Console/ImGuiConsole.h>
 
@@ -1183,6 +1184,8 @@ void ezImGuiConsole::RenderLogWindow(bool bFull)
 
 void ezImGuiConsole::RenderConsole(bool bIsOpen)
 {
+  ImGui::SetCurrentContext(nullptr);
+  EZ_SCOPE_EXIT(ImGui::SetCurrentContext(nullptr));
   UpdateFrameTimes();
   UpdateMemoryUsage();
 
@@ -1207,6 +1210,8 @@ void ezImGuiConsole::RenderConsole(bool bIsOpen)
       return;
 
     ezImgui::GetSingleton()->SetCurrentContextForView(pView->GetHandle());
+    if (ImGui::GetCurrentContext() == nullptr)
+      return;
   }
 
   if (bIsOpen)

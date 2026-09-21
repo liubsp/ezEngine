@@ -4,6 +4,7 @@
 #include <Core/System/Window.h>
 #include <Core/World/World.h>
 #include <Foundation/Logging/Log.h>
+#include <Foundation/Types/ScopeExit.h>
 #include <GameEngine/DearImgui/DearImgui.h>
 #include <RendererCore/Debug/DebugRenderer.h>
 #include <RendererCore/Meshes/MeshComponent.h>
@@ -82,6 +83,9 @@ void SampleGameState::BeforeWorldUpdate()
 
     // BEGIN-DOCS-CODE-SNIPPET: imgui-activate
     ezImgui::GetSingleton()->SetCurrentContextForView(m_hMainView);
+    EZ_SCOPE_EXIT(ImGui::SetCurrentContext(nullptr));
+    if (ImGui::GetCurrentContext() == nullptr)
+      return;
     // END-DOCS-CODE-SNIPPET
 
     ezImgui::GetSingleton()->SetPassInputToImgui(false); // reset this state, to deactivate input processing as long as SampleGameState::ProcessInput() isn't called again

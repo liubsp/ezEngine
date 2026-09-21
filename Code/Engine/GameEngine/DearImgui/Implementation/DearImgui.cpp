@@ -8,6 +8,7 @@
 #  include <Core/Input/InputManager.h>
 #  include <Foundation/Configuration/Startup.h>
 #  include <Foundation/Time/Clock.h>
+#  include <Foundation/Types/ScopeExit.h>
 #  include <GameEngine/DearImgui/DearImgui.h>
 #  include <GameEngine/GameApplication/GameApplication.h>
 #  include <Imgui/imgui_internal.h>
@@ -54,6 +55,19 @@ namespace
       pAllocator->Deallocate(pPtr);
     }
   }
+
+  void DestroyImguiContext(ImGuiContext* pContext)
+  {
+    // A finished UI batch may not have reached extraction/finalization yet. End its frame before
+    // destruction so the shared font atlas is not left locked, including singleton-first shutdown.
+    ImGui::SetCurrentContext(pContext);
+    if (pContext->WithinFrameScope)
+      ImGui::EndFrame();
+
+    // DestroyContext restores the incoming binding; never restore another (possibly dead) context.
+    ImGui::SetCurrentContext(nullptr);
+    ImGui::DestroyContext(pContext);
+  }
 } // namespace
 
 EZ_IMPLEMENT_SINGLETON(ezImgui);
@@ -73,7 +87,12 @@ ezImgui::~ezImgui()
 
 void ezImgui::SetCurrentContextForView(const ezViewHandle& hView)
 {
+  // An incoming worker binding may belong to a view destroyed on another thread.
+  ImGui::SetCurrentContext(nullptr);
   EZ_LOCK(m_ViewToContextTableMutex);
+  ezView* pView = nullptr;
+  if (!ezRenderWorld::TryGetView(hView, pView))
+    return;
 
   Context& context = m_ViewToContextTable[hView];
   if (context.m_pImGuiContext == nullptr)
@@ -303,29 +322,45 @@ void ezImgui::Startup(ezImguiConfigFontCallback configFontCallback)
   m_pSharedFontAtlas->TexID = RegisterTexture(hFont);
 
   ezGameApplicationBase::GetGameApplicationBaseInstance()->m_ExecutionEvents.AddEventHandler(ezMakeDelegate(&ezImgui::GameApplicationEventHandler, this));
+  ezRenderWorld::s_ViewDeletedEvent.AddEventHandler(ezMakeDelegate(&ezImgui::ViewDeletedEventHandler, this));
 }
 
 void ezImgui::Shutdown()
 {
+  ezRenderWorld::s_ViewDeletedEvent.RemoveEventHandler(ezMakeDelegate(&ezImgui::ViewDeletedEventHandler, this));
+  ezGameApplicationBase::GetGameApplicationBaseInstance()->m_ExecutionEvents.RemoveEventHandler(ezMakeDelegate(&ezImgui::GameApplicationEventHandler, this));
+
+  // DestroyContext restores the incoming TLS pointer. Never let it restore a stale binding.
+  ImGui::SetCurrentContext(nullptr);
+  EZ_LOCK(m_ViewToContextTableMutex);
+  for (auto it = m_ViewToContextTable.GetIterator(); it.IsValid(); ++it)
+  {
+    DestroyImguiContext(it.Value().m_pImGuiContext);
+  }
+  m_ViewToContextTable.Clear();
+
+  // Context shutdown may still use the shared atlas; release it only after all contexts are gone.
   if (m_pSharedFontAtlas)
   {
     UnregisterResource(m_pSharedFontAtlas->TexID);
   }
   m_pSharedFontAtlas = nullptr;
 
-  ezGameApplicationBase::GetGameApplicationBaseInstance()->m_ExecutionEvents.RemoveEventHandler(ezMakeDelegate(&ezImgui::GameApplicationEventHandler, this));
   EZ_ASSERT_DEV(m_RegisteredTextures.IsEmpty(), "Not all registered textures were unregistered. You need to call 'UnregisterResource' before shutdown.");
   m_RegisteredTextures.Clear();
+}
 
-
-
-  for (auto it = m_ViewToContextTable.GetIterator(); it.IsValid(); ++it)
+void ezImgui::ViewDeletedEventHandler(ezView* pView)
+{
+  // The host has joined update/extraction batches before deleting a view. Other workers may still
+  // have an idle legacy TLS binding, so consumers must rebind from the table, never inspect that TLS.
+  ImGui::SetCurrentContext(nullptr);
+  EZ_LOCK(m_ViewToContextTableMutex);
+  Context context;
+  if (m_ViewToContextTable.Remove(pView->GetHandle(), &context))
   {
-    Context& context = it.Value();
-    ImGui::DestroyContext(context.m_pImGuiContext);
-    context.m_pImGuiContext = nullptr;
+    DestroyImguiContext(context.m_pImGuiContext);
   }
-  m_ViewToContextTable.Clear();
 }
 
 ImGuiContext* ezImgui::CreateContext()
@@ -454,10 +489,18 @@ void ezImgui::GameApplicationEventHandler(const ezGameApplicationExecutionEvent&
 {
   if (e.m_Type == ezGameApplicationExecutionEvent::Type::AfterUpdatePlugins)
   {
-    ImGuiContext* pContext = ImGui::GetCurrentContext();
-    if (pContext && pContext->Initialized && pContext->WithinFrameScope)
+    ImGui::SetCurrentContext(nullptr);
+    EZ_SCOPE_EXIT(ImGui::SetCurrentContext(nullptr));
+    EZ_LOCK(m_ViewToContextTableMutex);
+    const ezUInt64 uiFrame = ezRenderWorld::GetFrameCounter();
+    for (auto it = m_ViewToContextTable.GetIterator(); it.IsValid(); ++it)
     {
-      ImGui::EndFrame();
+      const Context& context = it.Value();
+      if (context.m_uiFrameBeginCounter == uiFrame && context.m_pImGuiContext->WithinFrameScope)
+      {
+        ImGui::SetCurrentContext(context.m_pImGuiContext);
+        ImGui::EndFrame();
+      }
     }
   }
 }
