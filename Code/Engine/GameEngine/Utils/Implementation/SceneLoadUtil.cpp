@@ -8,6 +8,23 @@
 // preloading assets is considered to be the vast majority of scene loading
 constexpr float fCollectionPreloadPiece = 0.9f;
 
+namespace
+{
+  ezStatus ReadSceneHeader(ezStreamReader& inout_stream)
+  {
+    ezAssetFileHeader header;
+    if (header.Read(inout_stream).Failed())
+      return ezStatus("Invalid or truncated asset file header.");
+
+    char szSceneTag[16];
+    if (inout_stream.ReadBytes(szSceneTag, sizeof(szSceneTag)) != sizeof(szSceneTag))
+      return ezStatus("Truncated scene tag.");
+    if (!ezStringUtils::IsEqualN(szSceneTag, "[ezBinaryScene]", 16))
+      return ezStatus("The given file isn't an object-graph file.");
+    return EZ_SUCCESS;
+  }
+} // namespace
+
 ezSceneLoadUtility::ezSceneLoadUtility() = default;
 ezSceneLoadUtility::~ezSceneLoadUtility() = default;
 
@@ -59,15 +76,7 @@ ezStatus ezSceneLoadUtility::LoadSceneImmediate(ezWorld& inout_targetWorld, ezSt
   if (fileReader.Open(ref_sFinalPath).Failed())
     return ezStatus("Failed to open the file.");
 
-  // Read and skip the asset file header
-  ezAssetFileHeader header;
-  header.Read(fileReader).AssertSuccess();
-
-  char szSceneTag[16];
-  fileReader.ReadBytes(szSceneTag, sizeof(char) * 16);
-
-  if (!ezStringUtils::IsEqualN(szSceneTag, "[ezBinaryScene]", 16))
-    return ezStatus("The given file isn't an object-graph file.");
+  EZ_SUCCEED_OR_RETURN(ReadSceneHeader(fileReader));
 
   ezWorldReader worldReader;
   if (worldReader.ReadWorldDescription(fileReader).Failed())
@@ -130,19 +139,19 @@ void ezSceneLoadUtility::LoadingFailed(const ezFormatString& reason)
 
   ezStringBuilder tmp;
   m_sFailureReason = reason.GetText(tmp);
+  // Failure paths run before instantiation, without holding a world marker during cleanup.
+  m_pInstantiationContext = nullptr;
+  m_pWorld = nullptr;
+  m_WorldReader.ClearAndCompact();
+  m_FileReader.Close();
+  m_hPreloadCollection.Invalidate();
+  m_fLoadingProgress = 0.0f;
 }
 
 void ezSceneLoadUtility::TickSceneLoading()
 {
-  switch (m_LoadingState)
-  {
-    case LoadingState::FinishedSuccessfully:
-    case LoadingState::Failed:
-      return;
-
-    default:
-      break;
-  }
+  if (m_LoadingState != LoadingState::Ongoing)
+    return;
 
   EZ_PROFILE_SCOPE("TickSceneLoading");
 
@@ -192,12 +201,6 @@ void ezSceneLoadUtility::TickSceneLoading()
   {
     EZ_LOG_BLOCK("LoadObjectGraph", m_sRedirectedFile);
 
-    ezWorldDesc desc(m_sRedirectedFile);
-    m_pWorld = EZ_DEFAULT_NEW(ezWorld, desc);
-    m_pWorld->SetWorldSimulationEnabled(false);
-
-    EZ_LOCK(m_pWorld->GetWriteMarker());
-
     if (m_FileReader.Open(m_sRedirectedFile).Failed())
     {
       LoadingFailed("Failed to open the file.");
@@ -205,16 +208,10 @@ void ezSceneLoadUtility::TickSceneLoading()
     }
     else
     {
-      // Read and skip the asset file header
-      ezAssetFileHeader header;
-      header.Read(m_FileReader).AssertSuccess();
-
-      char szSceneTag[16];
-      m_FileReader.ReadBytes(szSceneTag, sizeof(char) * 16);
-
-      if (!ezStringUtils::IsEqualN(szSceneTag, "[ezBinaryScene]", 16))
+      const ezStatus headerStatus = ReadSceneHeader(m_FileReader);
+      if (headerStatus.Failed())
       {
-        LoadingFailed("The given file isn't an object-graph file.");
+        LoadingFailed(headerStatus.GetMessageString().GetView());
         return;
       }
 
@@ -224,6 +221,11 @@ void ezSceneLoadUtility::TickSceneLoading()
         return;
       }
 
+      // Do not create a world until the description has been read successfully.
+      ezWorldDesc desc(m_sRedirectedFile);
+      m_pWorld = EZ_DEFAULT_NEW(ezWorld, desc);
+      m_pWorld->SetWorldSimulationEnabled(false);
+      EZ_LOCK(m_pWorld->GetWriteMarker());
       // TODO: make frame time configurable ?
       m_pInstantiationContext = m_WorldReader.InstantiateWorld(*m_pWorld, nullptr, ezTime::MakeFromMilliseconds(1), &m_InstantiationProgress);
     }

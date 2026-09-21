@@ -10,6 +10,8 @@ public:
   ezAssetFileHeader();
 
   /// \brief Reads the hash from file. If the file is outdated, the hash is set to 0xFFFFFFFFFFFFFFFF.
+  /// Malformed, truncated and unsupported headers return failure without asserting.
+  /// Headers precede payload string-deduplication contexts.
   ezResult Read(ezStreamReader& inout_stream);
 
   /// \brief Writes the asset hash to file (plus a little version info)
