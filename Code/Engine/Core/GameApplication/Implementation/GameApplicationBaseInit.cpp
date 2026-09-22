@@ -20,6 +20,7 @@
 #include <Foundation/Utilities/CommandLineOptions.h>
 
 ezCommandLineOptionBool opt_DisableConsoleOutput("app", "-disableConsoleOutput", "Disables logging to the standard console window.", false);
+ezCommandLineOptionBool opt_Telemetry("app", "-telemetry", "Enables the development telemetry listener for ezInspector. Off by default; may require firewall permission.", false);
 ezCommandLineOptionInt opt_TelemetryPort("app", "-TelemetryPort", "The network port over which telemetry is sent.", ezTelemetry::s_uiPort);
 ezCommandLineOptionString opt_Profile("app", "-profile", "The platform profile to use.", "Default");
 
@@ -93,6 +94,10 @@ void ezGameApplicationBase::BaseInit_ConfigureLogging()
 void ezGameApplicationBase::Init_ConfigureTelemetry()
 {
 #if EZ_ENABLED(EZ_COMPILE_FOR_DEVELOPMENT)
+  // Decide before any bind, not from plugins or CVars loaded later. A port setting is not consent:
+  // the editor also supplies -TelemetryPort for ordinary local engine processes.
+  if (!opt_Telemetry.GetOptionValue(ezCommandLineOption::LogMode::AlwaysIfSpecified))
+    return;
   ezTelemetry::s_uiPort = static_cast<ezUInt16>(opt_TelemetryPort.GetOptionValue(ezCommandLineOption::LogMode::AlwaysIfSpecified));
   ezTelemetry::SetServerName(GetApplicationName());
   ezTelemetry::CreateServer();

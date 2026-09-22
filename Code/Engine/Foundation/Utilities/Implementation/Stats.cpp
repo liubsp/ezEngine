@@ -50,7 +50,8 @@ void ezStats::SetStat(ezStringView sStatName, const ezVariant& value)
 #if TRACY_ENABLE
   if (value.IsNumber())
   {
-    TracyPlot(it.Key().GetData(), value.ConvertTo<double>());
+    if (TracyIsStarted)
+      TracyPlot(it.Key().GetData(), value.ConvertTo<double>());
   }
 #endif
 }

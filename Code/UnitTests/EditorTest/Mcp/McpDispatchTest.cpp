@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QTcpServer>
 #include <QTimer>
 #include <ToolsFoundation/Project/ToolsProject.h>
 
@@ -78,14 +79,46 @@ class ezEditorTestMcpDispatch : public ezEditorTest
 {
 public:
   const char* GetTestName() const override { return "MCP Dispatch"; }
-  void SetupSubTests() override { AddSubTest("Nested events and project close", 0); }
-
-  ezTestAppRun RunSubTest(ezInt32, ezUInt32) override
+  void SetupSubTests() override
   {
+    AddSubTest("No listener without explicit port", 0);
+    AddSubTest("Nested events and project close", 1);
+  }
+
+  ezTestAppRun RunSubTest(ezInt32 iIdentifier, ezUInt32) override
+  {
+    auto* pCommandLine = ezCommandLineUtils::GetGlobalInstance();
+    auto savedArguments = pCommandLine->GetCommandLineArray();
+    EZ_SCOPE_EXIT(pCommandLine->SetCommandLine(savedArguments));
+    ezInt32 iPort = pCommandLine->GetIntOption("-editor-mcpport", 0);
+    const char* defaultArguments[] = {"EditorTest"};
+    pCommandLine->SetCommandLine(1, defaultArguments);
+    if (iIdentifier != 0)
+    {
+      // Avoid taking the conventional port from a user's editor when no test port was supplied.
+      if (iPort == 0)
+      {
+        QTcpServer reservation;
+        if (!EZ_TEST_BOOL(reservation.listen(QHostAddress::LocalHost, 0)))
+          return ezTestAppRun::Quit;
+        iPort = reservation.serverPort();
+      }
+      pCommandLine->InjectCustomArgument("-editor-mcpport");
+      ezStringBuilder port;
+      port.SetFormat("{}", iPort);
+      pCommandLine->InjectCustomArgument(port);
+    }
     if (!EZ_TEST_BOOL(CreateAndLoadProject("McpDispatch").Succeeded()))
       return ezTestAppRun::Quit;
+    EZ_SCOPE_EXIT(ezToolsProject::CloseProject());
 
     auto* pServer = ezMcpServer::GetInstance();
+    if (iIdentifier == 0)
+    {
+      EZ_TEST_BOOL(pServer == nullptr || !pServer->IsRunning());
+      ezToolsProject::CloseProject();
+      return ezTestAppRun::Quit;
+    }
     if (!EZ_TEST_BOOL(pServer != nullptr && pServer->IsRunning()))
       return ezTestAppRun::Quit;
 

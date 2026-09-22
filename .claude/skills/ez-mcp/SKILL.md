@@ -31,8 +31,8 @@ Binaries are in `Workspace/<workspace>-output/Bin/WinVs2026Dev64/`.
   does not.
 - Launch detached (`start ""` / `Start-Process`); it runs until told to quit.
 - Startup takes seconds - **poll the port**, do not sleep a fixed time.
-- Pick a port other than the default 7391 so a user's own editor keeps working.
-- Without `-mcpport` the game starts **no** server at all.
+- Pick an unused port per editor. Without `-editor-mcpport`, the editor starts **no** MCP server.
+- Without either `-mcpport` or `-editor-mcpport`, the game starts **no** MCP server.
 - `-editor-mcpport` and `-mcpport` are separate names on purpose: the editor forwards its whole command
   line to its engine process, which takes `-editor-mcpport` + 1. Read that port from the editor's
   `app_info` as `engineMcpPort` rather than computing it.

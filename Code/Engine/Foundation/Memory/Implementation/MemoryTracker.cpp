@@ -14,10 +14,38 @@
 #  include <tracy/tracy/Tracy.hpp>
 
 #  define EZ_TRACY_CALLSTACK_DEPTH 16
-#  define EZ_TRACY_ALLOC_CS(ptr, size, name) TracyAllocNS(ptr, size, EZ_TRACY_CALLSTACK_DEPTH, name)
-#  define EZ_TRACY_FREE_CS(ptr, name) TracyFreeNS(ptr, EZ_TRACY_CALLSTACK_DEPTH, name)
-#  define EZ_TRACY_ALLOC(ptr, size, name) TracyAllocN(ptr, size, name)
-#  define EZ_TRACY_FREE(ptr, name) TracyFreeN(ptr, name)
+#  define EZ_TRACY_ALLOC_CS(ptr, size, name)                     \
+    do                                                           \
+    {                                                            \
+      if (TracyIsStarted)                                        \
+      {                                                          \
+        TracyAllocNS(ptr, size, EZ_TRACY_CALLSTACK_DEPTH, name); \
+      }                                                          \
+    } while (false)
+#  define EZ_TRACY_FREE_CS(ptr, name)                     \
+    do                                                    \
+    {                                                     \
+      if (TracyIsStarted)                                 \
+      {                                                   \
+        TracyFreeNS(ptr, EZ_TRACY_CALLSTACK_DEPTH, name); \
+      }                                                   \
+    } while (false)
+#  define EZ_TRACY_ALLOC(ptr, size, name) \
+    do                                    \
+    {                                     \
+      if (TracyIsStarted)                 \
+      {                                   \
+        TracyAllocN(ptr, size, name);     \
+      }                                   \
+    } while (false)
+#  define EZ_TRACY_FREE(ptr, name) \
+    do                             \
+    {                              \
+      if (TracyIsStarted)          \
+      {                            \
+        TracyFreeN(ptr, name);     \
+      }                            \
+    } while (false)
 #else
 #  define EZ_TRACY_ALLOC_CS(ptr, size, name)
 #  define EZ_TRACY_FREE_CS(ptr, name)

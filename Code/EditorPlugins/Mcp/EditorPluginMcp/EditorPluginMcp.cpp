@@ -18,12 +18,13 @@
 /// processes reading the same number and fighting over the port; two names mean the engine process can
 /// derive its own from this one without anything being passed explicitly.
 ///
-/// The default is what a client connects to when nothing else was agreed on, so changing it means
-/// changing the documented URL as well (see the 'ez-mcp' skill). Ports below 1024 are excluded
+/// No server starts without this option. Its fallback value applies only when explicitly requested.
+/// Ports below 1024 are excluded
 /// because they need elevation on most systems, and 0 because 'any free port' cannot be put into a
 /// client's URL.
 static ezCommandLineOptionInt s_opt_McpPort("_Mcp", "-editor-mcpport",
   "The port that the editor's MCP server listens on, on 127.0.0.1.\n"
+  "No server is started unless this option is supplied.\n"
   "Pass a distinct port per editor to run several at the same time.\n"
   "The engine process that runs the game serves MCP on this port + 1, unless it is given '-mcpport'.",
   7391, 1024, 0xFFFF);
@@ -188,7 +189,9 @@ static void ToolsProjectEventHandler(const ezToolsProjectEvent& e)
 {
   if (e.m_Type == ezToolsProjectEvent::Type::ProjectOpened)
   {
-    s_uiRequestedPort = static_cast<ezUInt16>(s_opt_McpPort.GetOptionValue(ezCommandLineOption::LogMode::FirstTimeIfSpecified));
+    s_uiRequestedPort = s_opt_McpPort.IsOptionSpecified()
+                          ? static_cast<ezUInt16>(s_opt_McpPort.GetOptionValue(ezCommandLineOption::LogMode::FirstTimeIfSpecified))
+                          : 0;
   }
   else if (e.m_Type == ezToolsProjectEvent::Type::ProjectClosing)
   {

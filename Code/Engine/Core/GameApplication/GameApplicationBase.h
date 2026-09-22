@@ -226,6 +226,7 @@ protected:
   /// \brief Executes all 'Init_' functions. Typically done after core system startup
   virtual void ExecuteInitFunctions();
   virtual void Init_PlatformProfile_SetPreferred();
+  /// Starts development telemetry only with -telemetry. -TelemetryPort alone does not enable it.
   virtual void Init_ConfigureTelemetry();
   virtual void Init_FileSystem_SetSpecialDirs();
   virtual void Init_LoadRequiredPlugins();

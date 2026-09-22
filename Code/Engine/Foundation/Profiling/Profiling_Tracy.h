@@ -201,7 +201,7 @@ constexpr ezUInt32 __tracyEzZoneColor(ezUInt64 uiHash)
 
 /// \brief Similar to EZ_PROFILE_SCOPE, but only forwards to Tracy
 #  define EZ_TRACY_PROFILE_SCOPE(ScopeName)                                            \
-    ZoneScoped;                                                                        \
+    ZoneNamed(___tracy_scoped_zone, TracyIsStarted);                                   \
     ZoneName(__tracyEzStringToConstChar(ScopeName), __tracyEzStringLength(ScopeName)); \
     ZoneColor(__tracyEzZoneColor(ezHashingUtils::StringHash(ScopeName)))
 
@@ -223,7 +223,14 @@ constexpr ezUInt32 __tracyEzZoneColor(ezUInt64 uiHash)
     EZ_TRACY_PROFILE_SCOPE(ListName);
 
 #  undef EZ_PROFILER_FRAME_MARKER
-#  define EZ_PROFILER_FRAME_MARKER() FrameMark
+#  define EZ_PROFILER_FRAME_MARKER() \
+    do                               \
+    {                                \
+      if (TracyIsStarted)            \
+      {                              \
+        FrameMark;                   \
+      }                              \
+    } while (false)
 
 #else
 

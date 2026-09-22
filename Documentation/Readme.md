@@ -2,6 +2,8 @@
 
 The ezEngine documentation is available at [ezEngine.net](https://ezengine.net). The C++ API docs are hosted [here](https://ezengine.github.io/api-docs/).
 
+See [Optional debug services](DebugServices.md) for telemetry, MCP and Tracy startup options.
+
 The text below explains how to generate the API docs locally (not meant for regular users).
 
 ## Generating the API docs with Doxygen

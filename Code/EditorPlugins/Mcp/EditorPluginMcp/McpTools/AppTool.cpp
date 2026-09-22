@@ -33,7 +33,7 @@ ezStringView ezMcpEditorAppTool::GetRelaunchHint() const
          "open a dialog while opening the project - before any tool call can suppress it - and hang there. "
          "It serves MCP at http://127.0.0.1:<port>/mcp "
          "once the project is open, which takes a few seconds - poll the port rather than assuming a delay. "
-         "'-editor-mcpport' defaults to 7391 and is what lets several editors run at once, each on its own port. "
+         "Without '-editor-mcpport' no editor MCP listener starts. Supply a distinct port for each editor. "
          "Call app_info for this editor's own port and executable path.";
 }
 

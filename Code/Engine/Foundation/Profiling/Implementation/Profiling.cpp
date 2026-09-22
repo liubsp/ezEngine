@@ -10,6 +10,7 @@
 #include <Foundation/Memory/CommonAllocators.h>
 #include <Foundation/Profiling/Profiling.h>
 #include <Foundation/Threading/ThreadUtils.h>
+#include <Foundation/Utilities/CommandLineOptions.h>
 
 #if EZ_ENABLED(EZ_USE_PROFILING)
 
@@ -29,6 +30,10 @@ private:
 };
 
 static ezProfileCaptureDataTransfer s_ProfileCaptureDataTransfer;
+
+#  if TRACY_ENABLE
+static ezCommandLineOptionBool s_opt_Tracy("app", "-tracy", "Enables the Tracy network profiler for this process. Local profiling capture works without it.", false);
+#  endif
 
 namespace
 {
@@ -55,6 +60,14 @@ EZ_BEGIN_SUBSYSTEM_DECLARATION(Foundation, ProfilingSystem)
   }
   ON_CORESYSTEMS_STARTUP
   { 
+#if TRACY_ENABLE
+    if (!TracyIsStarted && s_opt_Tracy.GetOptionValue(ezCommandLineOption::LogMode::AlwaysIfSpecified))
+    {
+      // Keep the profiler process-wide, as with Tracy's automatic delayed initialization.
+      // Core-system restarts must not free it underneath active zones or cached thread producers.
+      tracy::StartupProfiler();
+    }
+#endif
     s_PluginEventSubscription = ezPlugin::Events().AddEventHandler(&PluginEvent);
     s_ProfileCaptureDataTransfer.EnableDataTransfer("Profiling Capture");
   }
