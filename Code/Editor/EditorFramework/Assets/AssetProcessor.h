@@ -77,7 +77,7 @@ public:
 };
 
 /// \brief Encapsulates one ezEditorProcessor process managed by ezAssetProcessor.
-class ezEditorProcessorProcess
+class EZ_EDITORFRAMEWORK_DLL ezEditorProcessorProcess
 {
 public:
   enum class State
@@ -88,7 +88,8 @@ public:
     ReadyForProcessing,   ///< A work item has been found. Ready to start processing.
     Processing,           ///< A work item is being processed.
     ReportResult,         ///< Report result of the precessing phase.
-    Crashed               ///< Process has crashed. Dead end until `RequestRestart` is called.
+    Crashed,              ///< Process has crashed. Dead end until `RequestRestart` is called.
+    Stopped               ///< Owner intentionally stopped the process. No new work may start.
   };
 
 public:
@@ -112,9 +113,11 @@ public:
   void HandleHashMissmatch();
 
   ezResult StartProcess();
+  /// Stops the owned child intentionally. Tick(false) must still drain any pending work result.
   void ShutdownProcess();
 
 private:
+  friend class ezEditorTestAssetProcessor;
   void EventHandlerIPC(const ezProcessCommunicationChannel::Event& e);
   void ChannelEventHandler(const ezIpcChannelEvent& e);
 
@@ -125,7 +128,8 @@ private:
 private:
   State m_State = State::StartClient;
   ezEditorProcessCommunicationChannel* m_pIPC;
-  bool m_bProcessShouldBeRunning = false;
+  bool m_bProcessShouldBeRunning = false; ///< Owner intent, retained on unexpected process loss.
+  bool m_bWorkCancelled = false;
   bool m_bIsIdle = false;
   ezOsProcessID m_CurrentProcessID = {};
 

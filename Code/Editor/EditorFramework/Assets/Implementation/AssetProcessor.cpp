@@ -364,6 +364,18 @@ void ezEditorProcessorProcess::ShutdownProcess()
 {
   m_bProcessShouldBeRunning = false;
   m_pIPC->CloseConnection();
+
+  if (m_State == State::ReadyForProcessing || m_State == State::Processing)
+  {
+    // Drain the reservation and finish any published progress without blaming the asset for cancellation.
+    m_bWorkCancelled = true;
+    m_Status = ezStatus("Asset processing cancelled because the processor was stopped");
+    m_State = State::ReportResult;
+  }
+  else if (m_State != State::ReportResult && m_State != State::Crashed)
+  {
+    m_State = State::Stopped;
+  }
 }
 
 void ezEditorProcessorProcess::EventHandlerIPC(const ezProcessCommunicationChannel::Event& e)
@@ -499,9 +511,13 @@ bool ezEditorProcessorProcess::GetNextAssetToProcess(ezUuid& out_guid, ezDataDir
 
 void ezEditorProcessorProcess::OnProcessCrashed(ezStringView message)
 {
-  ShutdownProcess();
-  m_State = (m_State == State::Processing || m_State == State::ReadyForProcessing) ? State::ReportResult : State::Crashed;
-  m_Status = ezStatus(message);
+  // This was not an owner-requested stop. Keep that distinction after releasing the process group.
+  m_pIPC->CloseConnection();
+  if (m_State != State::ReportResult)
+  {
+    m_State = (m_State == State::Processing || m_State == State::ReadyForProcessing) ? State::ReportResult : State::Crashed;
+    m_Status = ezStatus(message);
+  }
   ezLogEntryDelegate logger([this](ezLogEntry& ref_entry)
     { m_LogEntries.PushBack(std::move(ref_entry)); });
   ezLog::Error(&logger, message);
@@ -540,7 +556,7 @@ ezOsProcessID ezEditorProcessorProcess::GetProcessId() const
 
 bool ezEditorProcessorProcess::HasProcessCrashed()
 {
-  return !m_pIPC->IsClientAlive();
+  return m_State == State::Crashed || (m_bProcessShouldBeRunning && !m_pIPC->IsClientAlive());
 }
 
 void ezEditorProcessorProcess::HandleHashMissmatch()
@@ -627,7 +643,7 @@ void ezEditorProcessorProcess::HandleHashMissmatch()
 bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
 {
   EZ_PROFILE_SCOPE("ezEditorProcessorProcess::Tick");
-  if (m_State != State::StartClient && m_State != State::Crashed)
+  if (m_bProcessShouldBeRunning && m_State != State::StartClient && m_State != State::Crashed)
   {
     if (!m_pIPC->IsClientAlive())
     {
@@ -636,7 +652,7 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
     }
   }
 
-  if (m_State >= State::LookingForWork && m_State <= State::Processing)
+  if (m_bProcessShouldBeRunning && m_State >= State::LookingForWork && m_State <= State::Processing)
   {
     if (!m_pIPC->IsConnected())
     {
@@ -651,6 +667,8 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
     {
       case State::StartClient:
       {
+        if (!bStartNewWork)
+          return false;
         if (StartProcess().Failed())
         {
           OnProcessCrashed("Asset processor did not launch");
@@ -693,6 +711,7 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
         m_TransitiveHull.Clear();
 
         // Clear transform result
+        m_bWorkCancelled = false;
         m_Status = ezStatus(EZ_SUCCESS);
         m_LogEntries.Clear();
         m_MissmatchTransformDependencies.Clear();
@@ -801,7 +820,7 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
       break;
       case State::ReportResult:
       {
-        const bool bProcessCrashed = !m_pIPC->IsClientAlive();
+        const bool bProcessCrashed = HasProcessCrashed();
 
         if (!m_MissmatchTransformDependencies.IsEmpty())
         {
@@ -812,7 +831,8 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
         const bool bDidStartWork = !m_ProcessingStartTime.IsZero();
         if (bDidStartWork)
         {
-          // The actual start times are only available if we receive a response message. If we crash, fall back to the range of [m_ProcessingStartTime, now()] as an estimate of the work time.
+          // A crash or cancellation before the response has no processor timestamps.
+          const bool bHasResponse = !m_FinishedProcessing.IsZero();
           ezTime processingEndTime = ezTime::Now();
 
           ezAssetProcessorProgressEvent e;
@@ -820,20 +840,21 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
           e.m_uiProcessorID = m_uiProcessorID;
           e.m_AssetGuid = m_AssetGuid;
           e.m_sAssetPath = m_AssetPath.GetDataDirRelativePath();
-          e.m_StartTime = bProcessCrashed ? m_ProcessingStartTime : m_StartedProcessing;
-          e.m_TransformStartTime = bProcessCrashed ? m_ProcessingStartTime : m_StartedTransform;
-          e.m_EndTime = bProcessCrashed ? processingEndTime : m_FinishedProcessing;
+          e.m_StartTime = bHasResponse ? m_StartedProcessing : m_ProcessingStartTime;
+          e.m_TransformStartTime = bHasResponse ? m_StartedTransform : m_ProcessingStartTime;
+          e.m_EndTime = bHasResponse ? m_FinishedProcessing : processingEndTime;
           e.m_Result = m_Status;
           ezAssetProcessor::GetSingleton()->m_ProgressEvents.Broadcast(e);
         }
 
-        if (m_Status.Succeeded())
+        // Cancellation leaves the transform state unchanged so a subsequent processor can retry.
+        if (!m_bWorkCancelled && m_Status.Succeeded())
         {
           ezAssetCurator::GetSingleton()->NotifyOfAssetChange(m_AssetGuid);
           ezAssetCurator::GetSingleton()->NeedsReloadResources(m_AssetGuid);
           ezLog::Info(&ezAssetProcessor::GetSingleton()->m_CuratorLog, "Finished '{0}'", m_AssetPath.GetDataDirRelativePath());
         }
-        else
+        else if (!m_bWorkCancelled)
         {
           if (m_Status.m_Result == ezTransformResult::NeedsImport)
           {
@@ -864,13 +885,18 @@ bool ezEditorProcessorProcess::Tick(bool bStartNewWork)
         {
           m_State = State::Crashed;
         }
-        else
+        else if (m_bProcessShouldBeRunning)
         {
           m_State = State::LookingForWork;
+        }
+        else
+        {
+          m_State = State::Stopped;
         }
       }
       break;
       case State::Crashed:
+      case State::Stopped:
       {
         return false;
       }

@@ -476,6 +476,7 @@ private:
   friend class ezUpdateTask;
   friend class ezAssetProcessor;
   friend class ezEditorProcessorProcess;
+  friend class ezEditorTestAssetProcessor;
 
   mutable ezCuratorMutex m_CuratorMutex; // Global lock
   ezTaskGroupID m_InitializeCuratorTaskID;
