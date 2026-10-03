@@ -115,9 +115,20 @@ process until play-the-game runs, and why input does nothing and screenshots tim
   reads as disabled for a moment and `game_info` on the game port is the better confirmation.
 - **`app_screenshot` returns a path, not the image.** Read that file. A rendered frame is the evidence a
   change works; "did not crash" is not.
-- **`input_set` then `game_wait`** - input is consumed one frame at a time, so setting a slot alone does
-  nothing. `input_sequence` does a whole set/wait/text/clear chain in one call. Injected values merge
-  with the real keyboard, larger wins, so a human is never locked out.
+- **`input_set` sets a contribution, not an acknowledged gesture.** Its wire `frames` and response
+  `framesRemaining` count completed input-manager updates, starting with the next update; hardware
+  polls do not spend that duration. Use a finite integer from 1 to 4294967295 for a timed hold, or
+  omit/pass 0 to hold until changed. Relative deltas repeat on every consuming update; use positive
+  values in directional slots (`mouse_move_neg_x` for leftward movement), not negative numbers.
+  Button/relative values merge with hardware by taking the larger value; written absolute positions
+  override hardware positions until cleared/expired. Clear cannot retract an already-gathered value.
+- **`game_wait` and sequence waits count presentation events, not input consumption.** Render-only
+  ticks may satisfy a wait without consuming a gesture. `input_sequence` prevalidates its entire
+  set/wait/text/clear chain; each wait accepts 1-10000 integral `frames` (default 1). Its positive
+  finite `timeout` is seconds per wait (default 30). Timeout releases sequence-written slots and
+  resets continuation; successful final holds intentionally remain. A sequence without a wait can
+  finish before input is consumed. Use caller deadlines and `input_set {"clearAll":true}` cleanup;
+  if host pumping stops, owned-host cleanup is still the backstop.
 - **`game_pause` stops the engine clock, not necessarily the game's own simulation.**
 - `cvar_list` is worth far more here than in the editor: render passes, physics and AI visualisation are
   mostly CVars.

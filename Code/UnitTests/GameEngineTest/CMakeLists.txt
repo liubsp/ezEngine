@@ -18,6 +18,11 @@ target_link_libraries(${PROJECT_NAME}
   VisualScriptPlugin  
 )
 
+if (TARGET Mcp AND TARGET McpPlugin)
+  target_link_libraries(${PROJECT_NAME} PRIVATE Mcp McpPlugin)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE BUILDSYSTEM_ENABLE_MCP_TESTS)
+endif()
+
 if (EZ_3RDPARTY_KRAUT_SUPPORT)
   target_link_libraries(${PROJECT_NAME}
     PUBLIC
@@ -42,5 +47,4 @@ endif()
 ez_add_renderers(${PROJECT_NAME})
 
 ez_ci_add_test(${PROJECT_NAME} NEEDS_HW_ACCESS)
-
 

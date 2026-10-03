@@ -15,7 +15,7 @@ class ezMcpServer;
 ///
 /// Everything is static because there is one process, one server and one frame loop. There is nothing a
 /// second instance would mean.
-class ezMcpEngineHost
+class EZ_MCPPLUGIN_DLL ezMcpEngineHost
 {
 public:
   /// \brief Resolves the port, starts the server and subscribes to the frame loop.

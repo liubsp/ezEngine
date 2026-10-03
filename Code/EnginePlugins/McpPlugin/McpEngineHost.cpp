@@ -117,8 +117,8 @@ void ezMcpEngineHost::ExecutionEventHandler(const ezGameApplicationExecutionEven
 {
   if (e.m_Type == ezGameApplicationExecutionEvent::Type::BeforeWorldUpdates)
   {
-    // Before the world ticks and before input is gathered, so a value written by input_set is picked up
-    // by the very frame the agent asked for rather than the one after it.
+    // Before the world ticks, but after this tick's input update. Values written here can contribute
+    // to the next input-manager update; answering a call does not establish input consumption.
     s_pServer->ProcessPendingRequests();
     return;
   }

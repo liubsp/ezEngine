@@ -2,6 +2,7 @@
 
 #include <McpPlugin/McpPluginDLL.h>
 
+#include <Foundation/Containers/Set.h>
 #include <Foundation/Time/Time.h>
 #include <Foundation/Types/UniquePtr.h>
 #include <Foundation/Types/Variant.h>
@@ -37,10 +38,10 @@ private:
   void ExecuteSet(const ezVariantDictionary& arguments, ezMcpToolResult& out_result);
   void ExecuteSequence(const ezVariantDictionary& arguments, ezMcpToolResult& out_result);
 
-  /// \brief Writes every slot in \a slots via m_pDevice, the same way ExecuteSet() does. Shared with
-  /// ExecuteSequence()'s 'set' steps. Returns false (and has already set out_result) on the first
-  /// value that is not a number.
-  bool ApplySlots(const ezVariantDictionary& slots, ezUInt32 uiFrames, ezMcpToolResult& out_result);
+  /// Only called with validated slots. Validation completes before any device mutation.
+  void ApplySlots(const ezVariantDictionary& slots, ezUInt32 uiFrames);
+  bool ValidateSequence(const ezVariantDictionary& arguments, ezMcpToolResult& out_result);
+  void ResetSequence(bool bReleaseTouchedSlots);
 
   ezUniquePtr<ezMcpInputDevice> m_pDevice;
 
@@ -57,6 +58,8 @@ private:
   ezUInt64 m_uiSequenceWaitUntilFrame = 0;
   ezTime m_SequenceWaitStarted;
   ezTime m_SequenceWaitTimeout;
+  ezVariantArray m_SequenceSteps;
+  ezSet<ezString> m_SequenceTouchedSlots;
 
   /// A caller that asks for a sequence of a million steps has made a mistake that would otherwise look
   /// exactly like a hang - same reasoning as game_wait's s_uiMaxFrames.

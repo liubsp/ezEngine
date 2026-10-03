@@ -81,10 +81,11 @@ void ezMcpInputDevice::GetHeldSlots(ezDynamicArray<HeldSlot>& out_slots) const
   }
 }
 
-void ezMcpInputDevice::UpdateInputSlotValues()
+void ezMcpInputDevice::ResetInputSlotValues()
 {
-  // Called once per input update, which is what makes it the place to count frames down. The values
-  // themselves need no work - they are already in m_InputSlotValues and stay there until changed.
+  // The manager calls this after gathering values and computing slot/action states, once per Update.
+  // Expiry must not happen in UpdateInputSlotValues: that hook runs before gathering, and can run
+  // repeatedly via PollHardware without any input being consumed.
   for (auto it = m_RemainingFrames.GetIterator(); it.IsValid();)
   {
     ezUInt32& uiRemaining = it.Value();
@@ -96,8 +97,8 @@ void ezMcpInputDevice::UpdateInputSlotValues()
       continue;
     }
 
-    // The last frame of the hold has now been delivered, so stop writing the slot. Removing during
-    // iteration is why the iterator is advanced by Remove() rather than by ++it here.
+    // The completed manager snapshot still contains this contribution for game-state input reads.
+    // Removing the device's value here prevents it from contributing to the next update.
     m_InputSlotValues.Remove(it.Key());
     it = m_RemainingFrames.Remove(it);
   }

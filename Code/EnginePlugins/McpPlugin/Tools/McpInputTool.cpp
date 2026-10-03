@@ -23,6 +23,7 @@ void ezMcpInputTool::OnDeactivate()
 {
   // Destroying the device unregisters it, which also releases anything it was still holding down - a
   // key left pressed by a plugin that is going away would otherwise stay pressed forever.
+  ResetSequence(true);
   m_pDevice = nullptr;
 }
 
@@ -36,7 +37,7 @@ void ezMcpInputTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_tools)
       "the spelling is 'keyboard_w', 'mouse_button_0', 'mouse_move_pos_x', and which slots exist at all depends on "
       "which input devices the platform registered.\n"
       "'flags' says what kind of thing a slot is, which decides what value makes sense: a button is 0 or 1, an analog "
-      "axis is anything in between, and a relative slot like mouse movement is a per-frame delta rather than a "
+      "axis is anything in between, and a relative slot like mouse movement is a per-input-update delta rather than a "
       "position. 'value' is what the slot currently reads, merged across all devices including this one.";
 
     desc.m_sInputSchema = R"({"type":"object","properties":{"contains":{"type":"string","description":"Only return slots whose name or display name contains this text, case insensitive. Omit for all of them."},"activeOnly":{"type":"boolean","description":"Only return slots whose current value is not zero. Useful to find out what is being pressed right now. Default false."}}})";
@@ -48,15 +49,17 @@ void ezMcpInputTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_tools)
     desc.m_sDescription =
       "Presses keys and moves the mouse, by writing input slot values that the game reads as if they came from real "
       "hardware. Get the slot names from input_slots.\n"
-      "Values are merged with the real keyboard and mouse rather than replacing them, taking whichever is larger, so "
-      "this never locks a human out of the process.\n"
-      "'frames' is how long to hold the value. Omit it or pass 0 to hold indefinitely, which is what to use to press a "
-      "key now and release it later with a second call setting the same slot to 0 - or with 'clearAll'. A key held for "
-      "0 frames would never be seen, since the game reads input once per frame.\n"
-      "The game only consumes input while it renders frames, so follow this with game_wait to let those frames happen; "
-      "returning from this call only means the value is set, not that anything has reacted to it.";
+      "Button and relative values merge with hardware by taking the larger value. Absolute position slots written "
+      "by this device override hardware positions until cleared or expired.\n"
+      "'frames' counts completed input-manager updates, starting with the next update, not hardware polls, "
+      "application ticks or render frames. Pass an integer from 1 to 4294967295 for a timed hold; omit it or pass 0 "
+      "to hold indefinitely until changed or cleared. Relative values repeat on each consuming update; use the "
+      "positive-valued directional slots for negative movement.\n"
+      "Clearing stops this device's contribution; it cannot retract a value already gathered by a hardware poll. "
+      "Returning only means the value is set, not consumed or acted on. game_wait counts presentation events, "
+      "which need not include input updates. Use caller deadlines and explicit clearAll cleanup for stalled hosts.";
 
-    desc.m_sInputSchema = R"({"type":"object","properties":{"slots":{"type":"object","description":"Slot name to value, e.g. {\"keyboard_w\":1.0,\"mouse_move_pos_x\":0.01}. A value of 0 stops writing that slot.","additionalProperties":{"type":"number"}},"frames":{"type":"number","description":"Hold the values for this many frames, then release them. 0 or omitted means until changed."},"clearAll":{"type":"boolean","description":"Release everything this tool is currently holding, before applying 'slots'. Pass it on its own to let go of everything."}}})";
+    desc.m_sInputSchema = R"({"type":"object","properties":{"slots":{"type":"object","description":"Slot name to finite float value, e.g. {\"keyboard_w\":1.0,\"mouse_move_pos_x\":0.01}. A value of 0 stops writing that slot. All values are validated before mutation.","additionalProperties":{"type":"number"}},"frames":{"type":"integer","minimum":0,"maximum":4294967295,"description":"Completed input-manager updates to contribute to. Relative deltas repeat per update. 0 or omitted holds until changed; framesRemaining uses this same unit."},"clearAll":{"type":"boolean","description":"Release everything this tool is currently holding, before applying validated 'slots'. Pass it on its own to let go of everything."}}})";
   }
 
   {
@@ -65,17 +68,20 @@ void ezMcpInputTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_tools)
     desc.m_sDescription =
       "Runs a chain of input steps in order, in a single call, instead of one input_set/game_wait round trip "
       "per step. Each step is exactly one of:\n"
-      "  {\"set\": {...}} - writes slot values, same as input_set's 'slots' (merged with the real hardware, "
+      "  {\"set\": {...}} - writes slot values, same as input_set's 'slots' (same hardware merge/position override, "
       "held until changed or cleared).\n"
-      "  {\"wait\": {\"frames\": n}} - lets the game run for n frames before the next step, same as game_wait.\n"
+      "  {\"wait\": {\"frames\": n}} - waits for n presentation-counter increments, same as game_wait, "
+      "not n input-manager updates. Omitted frames defaults to 1; valid integers are 1 to 10000.\n"
       "  {\"text\": \"...\"} - queues typed text, delivered as one batch the next time the game reads input - "
       "not one character per frame, so it costs no extra frames by itself.\n"
       "  {\"clear\": true} - releases every slot this tool is currently holding.\n"
       "A chord (several keys in the same frame) is one 'set' step naming all of them, not several steps. "
-      "The call returns once every step has run; a 'wait' step is the only thing that actually spends frames, "
-      "so a sequence with none of those returns immediately, same as input_set.";
+      "All steps are validated before execution. Timeout releases slots written by this sequence and resets "
+      "its continuation; unrelated holds remain. Successful final holds intentionally remain until cleared. "
+      "The call returns once every step has run; only a 'wait' step defers, so a sequence without waits may "
+      "finish before any input is consumed. Caller deadlines and owned-host cleanup are still needed if pumping stops.";
 
-    desc.m_sInputSchema = R"({"type":"object","properties":{"steps":{"type":"array","description":"Executed in order. See the tool description for the four step shapes.","items":{"type":"object"}},"timeout":{"type":"number","description":"Give up on any individual 'wait' step after this many seconds. Default 30."}},"required":["steps"]})";
+    desc.m_sInputSchema = R"({"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":200,"description":"Executed in order. See the tool description for the four step shapes.","items":{"type":"object"}},"timeout":{"type":"number","exclusiveMinimum":0,"description":"Positive finite seconds allowed for each individual wait step. Default 30. A timeout releases sequence-written slots."}},"required":["steps"]})";
   }
 }
 
@@ -97,6 +103,49 @@ void ezMcpInputTool::Execute(ezStringView sToolName, const ezVariantDictionary& 
 
 namespace
 {
+  bool ReadFrames(const ezVariantDictionary& arguments, ezUInt32 uiDefault, ezUInt32 uiMinimum, ezUInt32 uiMaximum,
+    ezUInt32& out_uiFrames, ezMcpToolResult& out_result)
+  {
+    out_uiFrames = uiDefault;
+    const ezVariant* pValue = nullptr;
+    if (!arguments.TryGetValue("frames", pValue))
+      return true;
+
+    // The JSON reader supplies doubles. Check the original value before any integral narrowing:
+    // fractional/negative/out-of-range input must never turn into an indefinite hold.
+    if (pValue->IsNumber() && !pValue->IsA<bool>())
+    {
+      const double fFrames = pValue->ConvertTo<double>();
+      if (ezMath::IsFinite(fFrames) && fFrames >= uiMinimum && fFrames <= uiMaximum && ezMath::Floor(fFrames) == fFrames)
+      {
+        out_uiFrames = static_cast<ezUInt32>(fFrames);
+        return true;
+      }
+    }
+
+    ezStringBuilder sError;
+    sError.SetFormat("'frames' must be a finite integer between {} and {}.", uiMinimum, uiMaximum);
+    out_result.SetError(sError);
+    return false;
+  }
+
+  bool ValidateSlots(const ezVariantDictionary& slots, ezMcpToolResult& out_result)
+  {
+    for (auto it = slots.GetIterator(); it.IsValid(); ++it)
+    {
+      ezResult conversion = EZ_SUCCESS;
+      const float fValue = it.Value().ConvertTo<float>(&conversion);
+      if (conversion.Failed() || !ezMath::IsFinite(fValue))
+      {
+        ezStringBuilder sError;
+        sError.SetFormat("The value for slot '{}' must be a finite float.", it.Key());
+        out_result.SetError(sError);
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// \brief The flags of one slot, as the names a caller would recognise.
   ///
   /// Only the ones that change how a value should be chosen. The rest describe implementation details of
@@ -218,14 +267,17 @@ void ezMcpInputTool::ExecuteSet(const ezVariantDictionary& arguments, ezMcpToolR
 
   const bool bClearAll = ezMcpJson::GetBool(arguments, "clearAll", false);
 
-  if (bClearAll)
-  {
-    m_pDevice->ClearAllSlots();
-  }
+  ezUInt32 uiFrames = 0;
+  if (!ReadFrames(arguments, 0, 0, ezMath::MaxValue<ezUInt32>(), uiFrames, out_result))
+    return;
 
-  const ezUInt32 uiFrames = static_cast<ezUInt32>(ezMath::Max<ezInt64>(0, ezMcpJson::GetInt(arguments, "frames", 0)));
-
+  const ezVariant* pSlotArgument = nullptr;
   const ezVariantDictionary* pSlots = ezMcpJson::GetDict(arguments, "slots");
+  if (arguments.TryGetValue("slots", pSlotArgument) && pSlots == nullptr)
+  {
+    out_result.SetError("'slots' must be an object of slot names and values.");
+    return;
+  }
 
   if (pSlots == nullptr && !bClearAll)
   {
@@ -235,11 +287,15 @@ void ezMcpInputTool::ExecuteSet(const ezVariantDictionary& arguments, ezMcpToolR
 
   ezUInt32 uiSet = 0;
 
+  if (pSlots != nullptr && !ValidateSlots(*pSlots, out_result))
+    return;
+
+  if (bClearAll)
+    m_pDevice->ClearAllSlots();
+
   if (pSlots != nullptr)
   {
-    if (!ApplySlots(*pSlots, uiFrames, out_result))
-      return;
-
+    ApplySlots(*pSlots, uiFrames);
     uiSet = pSlots->GetCount();
   }
 
@@ -254,27 +310,18 @@ void ezMcpInputTool::ExecuteSet(const ezVariantDictionary& arguments, ezMcpToolR
   WriteHeldSlots(writer, held);
 
   writer.AddVariableString("note",
-    "The game reads input once per frame. Call game_wait to let frames run before checking what happened.");
+    "framesRemaining counts completed input-manager updates, not polls or presents. Values are set, not yet "
+    "necessarily consumed. game_wait counts presentation events and does not guarantee input consumption.");
 
   writer.EndObject();
   out_result.m_sText = writer.GetResult();
 }
 
-bool ezMcpInputTool::ApplySlots(const ezVariantDictionary& slots, ezUInt32 uiFrames, ezMcpToolResult& out_result)
+void ezMcpInputTool::ApplySlots(const ezVariantDictionary& slots, ezUInt32 uiFrames)
 {
   for (auto it = slots.GetIterator(); it.IsValid(); ++it)
   {
-    // Any convertible type, because a client sends 1, 1.0 and "1" for the same thing.
-    ezResult conversion = EZ_SUCCESS;
-    const float fValue = it.Value().ConvertTo<float>(&conversion);
-
-    if (conversion.Failed())
-    {
-      ezStringBuilder sError;
-      sError.SetFormat("The value for slot '{}' is not a number.", it.Key());
-      out_result.SetError(sError);
-      return false;
-    }
+    const float fValue = it.Value().ConvertTo<float>();
 
     if (fValue == 0.0f)
     {
@@ -285,24 +332,16 @@ bool ezMcpInputTool::ApplySlots(const ezVariantDictionary& slots, ezUInt32 uiFra
       m_pDevice->SetSlotValue(it.Key(), fValue, uiFrames);
     }
   }
-
-  return true;
 }
 
-void ezMcpInputTool::ExecuteSequence(const ezVariantDictionary& arguments, ezMcpToolResult& out_result)
+bool ezMcpInputTool::ValidateSequence(const ezVariantDictionary& arguments, ezMcpToolResult& out_result)
 {
-  if (m_pDevice == nullptr)
-  {
-    out_result.SetError("The synthetic input device does not exist, so no input can be written.");
-    return;
-  }
-
   const ezVariantArray* pSteps = ezMcpJson::GetArray(arguments, "steps");
 
   if (pSteps == nullptr || pSteps->IsEmpty())
   {
     out_result.SetError("'steps' must be a non-empty array of step objects.");
-    return;
+    return false;
   }
 
   if (pSteps->GetCount() > s_uiMaxSteps)
@@ -310,18 +349,105 @@ void ezMcpInputTool::ExecuteSequence(const ezVariantDictionary& arguments, ezMcp
     ezStringBuilder sError;
     sError.SetFormat("'steps' has {} entries, which is more than the limit of {}.", pSteps->GetCount(), s_uiMaxSteps);
     out_result.SetError(sError);
-    return;
+    return false;
   }
 
-  const ezInt64 iTimeout = ezMcpJson::GetInt(arguments, "timeout", static_cast<ezInt64>(s_DefaultWaitTimeout.GetSeconds()));
-  const ezTime waitTimeout = iTimeout > 0 ? ezTime::MakeFromSeconds(static_cast<double>(iTimeout)) : s_DefaultWaitTimeout;
+  ezTime waitTimeout = s_DefaultWaitTimeout;
+  const ezVariant* pTimeout = nullptr;
+  if (arguments.TryGetValue("timeout", pTimeout))
+  {
+    if (!pTimeout->IsNumber() || pTimeout->IsA<bool>() || !ezMath::IsFinite(pTimeout->ConvertTo<double>()) || pTimeout->ConvertTo<double>() <= 0)
+    {
+      out_result.SetError("'timeout' must be a positive finite number of seconds.");
+      return false;
+    }
+    waitTimeout = ezTime::MakeFromSeconds(pTimeout->ConvertTo<double>());
+  }
+
+  for (ezUInt32 i = 0; i < pSteps->GetCount(); ++i)
+  {
+    const ezVariant& step = (*pSteps)[i];
+    if (!step.IsA<ezVariantDictionary>() || step.Get<ezVariantDictionary>().GetCount() != 1)
+    {
+      ezStringBuilder sError;
+      sError.SetFormat("Step {} must be an object with exactly one of 'set', 'wait', 'text' or 'clear'.", i);
+      out_result.SetError(sError);
+      return false;
+    }
+
+    const ezVariantDictionary& stepDict = step.Get<ezVariantDictionary>();
+    const auto entry = stepDict.GetIterator();
+    bool bValid = false;
+    if (entry.Key() == "set" && entry.Value().IsA<ezVariantDictionary>())
+    {
+      bValid = ValidateSlots(entry.Value().Get<ezVariantDictionary>(), out_result);
+    }
+    else if (entry.Key() == "wait" && entry.Value().IsA<ezVariantDictionary>())
+    {
+      ezUInt32 uiFrames;
+      bValid = ReadFrames(entry.Value().Get<ezVariantDictionary>(), 1, 1, s_uiMaxWaitFrames, uiFrames, out_result);
+    }
+    else if (entry.Key() == "text" && entry.Value().IsA<ezString>())
+    {
+      bValid = true;
+    }
+    else if (entry.Key() == "clear" && entry.Value().IsA<bool>() && entry.Value().Get<bool>())
+    {
+      bValid = true;
+    }
+
+    if (!bValid)
+    {
+      if (!out_result.m_bIsError)
+        out_result.SetError("Expected 'set'/'wait' objects, 'text' string or 'clear': true.");
+      out_result.m_sText.PrependFormat("Step {}: ", i);
+      return false;
+    }
+  }
+
+  m_SequenceWaitTimeout = waitTimeout;
+  // Own the prevalidated arguments across deferred re-entries; no partial execution or repeated
+  // validation/conversion of earlier steps is needed while waiting.
+  m_SequenceSteps = *pSteps;
+  return true;
+}
+
+void ezMcpInputTool::ResetSequence(bool bReleaseTouchedSlots)
+{
+  if (bReleaseTouchedSlots && m_pDevice != nullptr)
+  {
+    for (const ezString& sSlot : m_SequenceTouchedSlots)
+      m_pDevice->ClearSlot(sSlot);
+  }
+  m_SequenceTouchedSlots.Clear();
+  m_SequenceSteps.Clear();
+  m_bSequenceActive = false;
+  m_bSequenceWaiting = false;
+  m_uiSequenceStep = 0;
+  m_uiSequenceWaitUntilFrame = 0;
+  m_SequenceWaitStarted = ezTime::MakeZero();
+  m_SequenceWaitTimeout = ezTime::MakeZero();
+}
+
+void ezMcpInputTool::ExecuteSequence(const ezVariantDictionary& arguments, ezMcpToolResult& out_result)
+{
+  if (m_pDevice == nullptr)
+  {
+    ResetSequence(true);
+    out_result.SetError("The synthetic input device does not exist, so no input can be written.");
+    return;
+  }
 
   if (!m_bSequenceActive)
   {
     // First entry. Later ones are re-entries from a 'wait' step's deferral, with the same 'arguments'
     // - see ezMcpToolResult::m_bNotFinished - so steps before m_uiSequenceStep must not run again.
+    if (!ValidateSequence(arguments, out_result))
+    {
+      ResetSequence(true);
+      return;
+    }
     m_bSequenceActive = true;
-    m_uiSequenceStep = 0;
   }
   else if (m_bSequenceWaiting)
   {
@@ -341,10 +467,10 @@ void ezMcpInputTool::ExecuteSequence(const ezVariantDictionary& arguments, ezMcp
     {
       ezStringBuilder sError;
       sError.SetFormat("Sequence timed out on step {} (a 'wait') after {} seconds. The game is not producing "
-                       "frames fast enough, or not at all - see game_wait's error for the usual cause.",
+                       "presentation events fast enough, or not at all. Sequence-written slots have been released.",
         m_uiSequenceStep, (ezTime::Now() - m_SequenceWaitStarted).GetSeconds());
       out_result.SetError(sError);
-      m_bSequenceActive = false;
+      ResetSequence(true);
       return;
     }
 
@@ -352,28 +478,15 @@ void ezMcpInputTool::ExecuteSequence(const ezVariantDictionary& arguments, ezMcp
     ++m_uiSequenceStep;
   }
 
-  for (; m_uiSequenceStep < pSteps->GetCount(); ++m_uiSequenceStep)
+  for (; m_uiSequenceStep < m_SequenceSteps.GetCount(); ++m_uiSequenceStep)
   {
-    const ezVariant& step = (*pSteps)[m_uiSequenceStep];
-
-    if (!step.IsA<ezVariantDictionary>())
-    {
-      ezStringBuilder sError;
-      sError.SetFormat("Step {} is not an object.", m_uiSequenceStep);
-      out_result.SetError(sError);
-      m_bSequenceActive = false;
-      return;
-    }
-
-    const ezVariantDictionary& stepDict = step.Get<ezVariantDictionary>();
+    const ezVariantDictionary& stepDict = m_SequenceSteps[m_uiSequenceStep].Get<ezVariantDictionary>();
 
     if (const ezVariantDictionary* pSet = ezMcpJson::GetDict(stepDict, "set"))
     {
-      if (!ApplySlots(*pSet, 0, out_result))
-      {
-        m_bSequenceActive = false;
-        return;
-      }
+      ApplySlots(*pSet, 0);
+      for (auto it = pSet->GetIterator(); it.IsValid(); ++it)
+        m_SequenceTouchedSlots.Insert(it.Key());
     }
     else if (ezMcpJson::GetBool(stepDict, "clear", false))
     {
@@ -381,50 +494,37 @@ void ezMcpInputTool::ExecuteSequence(const ezVariantDictionary& arguments, ezMcp
     }
     else
     {
-      const ezVariant* pText = nullptr;
       const ezVariantDictionary* pWait = ezMcpJson::GetDict(stepDict, "wait");
 
       if (pWait != nullptr)
       {
-        const ezInt64 iFrames = ezMcpJson::GetInt(*pWait, "frames", 1);
-
-        if (iFrames < 1 || iFrames > s_uiMaxWaitFrames)
+        ezUInt32 uiFrames;
+        if (!ReadFrames(*pWait, 1, 1, s_uiMaxWaitFrames, uiFrames, out_result))
         {
-          ezStringBuilder sError;
-          sError.SetFormat("Step {}: 'frames' must be between 1 and {}, not {}.", m_uiSequenceStep, s_uiMaxWaitFrames, iFrames);
-          out_result.SetError(sError);
-          m_bSequenceActive = false;
+          ResetSequence(true);
           return;
         }
 
-        m_uiSequenceWaitUntilFrame = ezMcpEngineHost::GetFrameCount() + static_cast<ezUInt64>(iFrames);
+        m_uiSequenceWaitUntilFrame = ezMcpEngineHost::GetFrameCount() + uiFrames;
         m_SequenceWaitStarted = ezTime::Now();
-        m_SequenceWaitTimeout = waitTimeout;
         m_bSequenceWaiting = true;
 
         out_result.m_bNotFinished = true;
         return;
       }
-      else if (stepDict.TryGetValue("text", pText) && pText->CanConvertTo<ezString>())
-      {
-        m_pDevice->QueueText(pText->ConvertTo<ezString>());
-      }
       else
       {
-        ezStringBuilder sError;
-        sError.SetFormat("Step {} is none of 'set', 'wait', 'text' or 'clear'.", m_uiSequenceStep);
-        out_result.SetError(sError);
-        m_bSequenceActive = false;
-        return;
+        m_pDevice->QueueText(stepDict.GetIterator().Value().Get<ezString>());
       }
     }
   }
 
-  m_bSequenceActive = false;
+  const ezUInt32 uiStepsRun = m_SequenceSteps.GetCount();
+  ResetSequence(false); // Successful final holds deliberately outlive the sequence.
 
   ezMcpJsonWriter writer;
   writer.BeginObject();
-  writer.AddVariableUInt32("stepsRun", pSteps->GetCount());
+  writer.AddVariableUInt32("stepsRun", uiStepsRun);
   writer.AddVariableUInt64("frameCount", ezMcpEngineHost::GetFrameCount());
 
   ezDynamicArray<ezMcpInputDevice::HeldSlot> held;

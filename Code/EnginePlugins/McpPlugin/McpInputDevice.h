@@ -9,12 +9,11 @@
 /// A real ezInputDevice rather than ezInputManager::InjectInputSlotValue(), for three reasons that all
 /// fall out of how the manager works:
 ///
-///  - GatherDeviceInputSlotValues() merges every device per slot with ezMath::Max, so this coexists with
-///    the actual keyboard and mouse instead of fighting them. A human at the machine keeps control.
+///  - GatherDeviceInputSlotValues() merges ordinary slots with ezMath::Max, so buttons and relative
+///    values coexist with actual hardware. Absolute positions are overridden while this device writes them.
 ///  - Key down/up transitions and dead zones are computed by the manager from the merged value, so
 ///    ezKeyState::Pressed and Released come out correct without this class knowing anything about them.
-///  - Holding a key for several frames is just leaving the value in m_InputSlotValues, and letting go is
-///    erasing it. There is no per-slot bookkeeping to get wrong.
+///  - Held values remain in m_InputSlotValues until changed, cleared or expired after input consumption.
 ///
 /// It registers no slots of its own. It writes the names that the real devices already registered -
 /// 'keyboard_w', 'mouse_button_0' - which is what makes the Max merge meaningful in the first place.
@@ -35,12 +34,13 @@ public:
 
   /// \brief Sets a slot's value, held until it is changed again or cleared.
   ///
-  /// \param uiFrames How many frames to hold it for, counted down once per input update. 0 means
-  ///        indefinitely - which is what a caller who wants to press a key now and release it later
-  ///        wants, and also the way to leave a movement axis held down.
+  /// \param uiFrames Number of completed ezInputManager::Update calls to contribute to, starting with
+  ///        the next update. Hardware polls do not spend this duration. 0 holds indefinitely.
+  ///        A relative value is repeated in each of those updates, not queued as a single displacement.
   void SetSlotValue(ezStringView sSlot, float fValue, ezUInt32 uiFrames);
 
   /// \brief Stops writing a slot entirely. Anything else writing it is then the only source again.
+  /// Values already gathered into the manager's pending snapshot are not retracted.
   void ClearSlot(ezStringView sSlot);
 
   /// \brief Stops writing every slot.
@@ -59,7 +59,7 @@ public:
     ezString m_sSlot;
     float m_fValue = 0.0f;
 
-    /// 0 means 'until changed'.
+    /// Remaining input-manager updates; 0 means 'until changed'.
     ezUInt32 m_uiFramesRemaining = 0;
   };
 
@@ -68,9 +68,10 @@ public:
 private:
   virtual void InitializeDevice() override {}
   virtual void RegisterInputSlots() override {}
-  virtual void UpdateInputSlotValues() override;
+  virtual void UpdateInputSlotValues() override {}
+  virtual void ResetInputSlotValues() override;
 
-  /// Slots the caller asked to be held for a limited number of frames, and the count that is left.
+  /// Timed slots and their remaining completed input-manager updates (wire name: frames).
   /// Slots held indefinitely are not in here at all - they just sit in m_InputSlotValues.
   ezMap<ezString, ezUInt32> m_RemainingFrames;
 
