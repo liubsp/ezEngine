@@ -1450,6 +1450,68 @@ void ImGuiIO::ClearEventsQueue()
     g.InputEventsQueue.clear();
 }
 
+static void ClearDragDropForContext(ImGuiContext& g);
+
+// Engine-fork extension. Keep cancellation here so backends do not depend on version-specific input state.
+void ImGuiIO::DiscardMouseInput()
+{
+    IM_ASSERT(Ctx != NULL && !Ctx->WithinFrameScope);
+    if (Ctx == NULL || Ctx->WithinFrameScope)
+        return;
+    ImGuiContext& g = *Ctx;
+
+    // Compact in place, preserving every non-mouse event and its relative order/identifier.
+    int write = 0;
+    for (int read = 0; read < g.InputEventsQueue.Size; read++)
+    {
+        const ImGuiInputEvent& event = g.InputEventsQueue[read];
+        if (event.Type != ImGuiInputEventType_MousePos && event.Type != ImGuiInputEventType_MouseButton && event.Type != ImGuiInputEventType_MouseWheel)
+            g.InputEventsQueue[write++] = event;
+    }
+    g.InputEventsQueue.resize(write);
+
+    MousePos = MousePosPrev = ImVec2(-FLT_MAX, -FLT_MAX);
+    MouseDelta = ImVec2(0.0f, 0.0f);
+    MouseWheel = MouseWheelH = 0.0f;
+    MouseCtrlLeftAsRightClick = false;
+    PenPressure = 0.0f;
+    for (int button = 0; button < ImGuiMouseButton_COUNT; button++)
+    {
+        MouseDown[button] = MouseClicked[button] = MouseReleased[button] = MouseDoubleClicked[button] = false;
+        MouseDownOwned[button] = MouseDownOwnedUnlessPopupClose[button] = false;
+        MouseDownDuration[button] = MouseDownDurationPrev[button] = -1.0f;
+        MouseClickedPos[button] = ImVec2(-FLT_MAX, -FLT_MAX);
+        MouseClickedTime[button] = -DBL_MAX;
+        MouseClickedCount[button] = MouseClickedLastCount[button] = 0;
+        MouseDragMaxDistanceSqr[button] = 0.0f;
+    }
+    for (int key = ImGuiKey_Mouse_BEGIN; key < ImGuiKey_Mouse_END; key++)
+    {
+        ImGuiKeyData* data = ImGui::GetKeyData(&g, (ImGuiKey)key);
+        data->Down = false;
+        data->AnalogValue = 0.0f;
+        data->DownDuration = data->DownDurationPrev = -1.0f;
+#ifndef IMGUI_DISABLE_OBSOLETE_KEYIO
+        KeysDown[key - ImGuiKey_NamedKey_BEGIN] = false;
+        if (KeyMap[key - ImGuiKey_NamedKey_BEGIN] != -1)
+            KeysDown[KeyMap[key - ImGuiKey_NamedKey_BEGIN]] = false;
+#endif
+    }
+    g.MouseLastValidPos = ImVec2(-FLT_MAX, -FLT_MAX);
+    g.MouseStationaryTimer = 0.0f;
+    g.WheelingWindow = NULL;
+    g.WheelingWindowRefMousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+    g.WheelingWindowStartFrame = g.WheelingWindowScrolledFrame = -1;
+    g.WheelingWindowReleaseTimer = 0.0f;
+    g.WheelingWindowWheelRemainder = g.WheelingAxisAvg = ImVec2(0.0f, 0.0f);
+
+    // A release would deliver an accepted payload. Cancellation must instead retire only mouse-owned drag/drop.
+    if (g.DragDropActive && !(g.DragDropSourceFlags & ImGuiDragDropFlags_SourceExtern))
+        ClearDragDropForContext(g);
+    // Do not clear ActiveId: a mouse-focused InputText must keep its text/edit/navigation state.
+    // Sliders and window movement retire their own mouse interaction normally on the next frame.
+}
+
 // Clear current keyboard/mouse/gamepad state + current frame text input buffer. Equivalent to releasing all keys/buttons.
 void ImGuiIO::ClearInputKeys()
 {
@@ -13140,6 +13202,11 @@ void ImGui::ClearDragDrop()
     ImGuiContext& g = *GImGui;
     if (g.DragDropActive)
         IMGUI_DEBUG_LOG_ACTIVEID("[dragdrop] ClearDragDrop()\n");
+    ClearDragDropForContext(g);
+}
+
+static void ClearDragDropForContext(ImGuiContext& g)
+{
     g.DragDropActive = false;
     g.DragDropPayload.Clear();
     g.DragDropAcceptFlags = ImGuiDragDropFlags_None;

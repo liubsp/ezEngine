@@ -85,7 +85,7 @@ ezImgui::~ezImgui()
   Shutdown();
 }
 
-void ezImgui::SetCurrentContextForView(const ezViewHandle& hView)
+void ezImgui::SetCurrentContextForView(const ezViewHandle& hView, bool bPassMouseInput)
 {
   // An incoming worker binding may belong to a view destroyed on another thread.
   ImGui::SetCurrentContext(nullptr);
@@ -111,7 +111,7 @@ void ezImgui::SetCurrentContextForView(const ezViewHandle& hView)
       ImGui::EndFrame();
     }
 
-    BeginFrame(hView);
+    BeginFrame(hView, bPassMouseInput);
     context.m_uiFrameBeginCounter = uiCurrentFrameCounter;
   }
 }
@@ -388,7 +388,7 @@ ImGuiContext* ezImgui::CreateContext()
   return context;
 }
 
-void ezImgui::BeginFrame(const ezViewHandle& hView)
+void ezImgui::BeginFrame(const ezViewHandle& hView, bool bPassMouseInput)
 {
   ezView* pView = nullptr;
   if (!ezRenderWorld::TryGetView(hView, pView))
@@ -410,39 +410,28 @@ void ezImgui::BeginFrame(const ezViewHandle& hView)
   cfg.DisplaySize.y = viewport.height;
   cfg.DeltaTime = (float)ezClock::GetGlobalClock()->GetTimeDiff().GetSeconds();
 
+  const bool bDeliverMouse = m_bPassInputToImgui && bPassMouseInput;
+  if (bDeliverMouse)
+    cfg.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+  else
+  {
+    cfg.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+    cfg.DiscardMouseInput();
+  }
+
   if (m_bPassInputToImgui)
   {
-    const ezString sChars = ezInputManager::RetrieveLastCharacters(false);
-    cfg.AddInputCharactersUTF8(sChars.GetData());
-
-    float mousex, mousey;
-    if (ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0) != ezKeyState::Up)
-    {
-      ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0_PositionX, &mousex);
-      ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0_PositionY, &mousey);
-      cfg.AddMousePosEvent(cfg.DisplaySize.x * mousex, cfg.DisplaySize.y * mousey);
-      cfg.AddMouseButtonEvent(0, ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0) >= ezKeyState::Pressed);
-      cfg.AddMouseButtonEvent(1, false);
-      cfg.AddMouseButtonEvent(2, false);
-    }
-    else
-    {
-      ezInputManager::GetInputSlotState(ezInputSlot_MousePositionX, &mousex);
-      ezInputManager::GetInputSlotState(ezInputSlot_MousePositionY, &mousey);
-      cfg.AddMousePosEvent(cfg.DisplaySize.x * mousex, cfg.DisplaySize.y * mousey);
-      cfg.AddMouseButtonEvent(0, ezInputManager::GetInputSlotState(ezInputSlot_MouseButton0) >= ezKeyState::Pressed);
-      cfg.AddMouseButtonEvent(1, ezInputManager::GetInputSlotState(ezInputSlot_MouseButton1) >= ezKeyState::Pressed);
-      cfg.AddMouseButtonEvent(2, ezInputManager::GetInputSlotState(ezInputSlot_MouseButton2) >= ezKeyState::Pressed);
-    }
-
-    float fMouseWheel = 0;
-    if (ezInputManager::GetInputSlotState(ezInputSlot_MouseWheelDown) == ezKeyState::Pressed)
-      fMouseWheel = -1;
-    if (ezInputManager::GetInputSlotState(ezInputSlot_MouseWheelUp) == ezKeyState::Pressed)
-      fMouseWheel = +1;
-    cfg.AddMouseWheelEvent(0, fMouseWheel);
-
-
+    // Queue each update's modifiers and ordinary keys together, before text and pointer events.
+    // A pointer/text trickling barrier between a modifier and its key would let the next update's
+    // modifier release overtake the delayed key press (e.g. turn Shift-Tab into forward Tab).
+    cfg.AddKeyEvent(ImGuiMod_Ctrl, ezInputManager::GetInputSlotState(ezInputSlot_KeyLeftCtrl) >= ezKeyState::Pressed ||
+                                     ezInputManager::GetInputSlotState(ezInputSlot_KeyRightCtrl) >= ezKeyState::Pressed);
+    cfg.AddKeyEvent(ImGuiMod_Shift, ezInputManager::GetInputSlotState(ezInputSlot_KeyLeftShift) >= ezKeyState::Pressed ||
+                                      ezInputManager::GetInputSlotState(ezInputSlot_KeyRightShift) >= ezKeyState::Pressed);
+    cfg.AddKeyEvent(ImGuiMod_Alt, ezInputManager::GetInputSlotState(ezInputSlot_KeyLeftAlt) >= ezKeyState::Pressed ||
+                                    ezInputManager::GetInputSlotState(ezInputSlot_KeyRightAlt) >= ezKeyState::Pressed);
+    cfg.AddKeyEvent(ImGuiMod_Super, ezInputManager::GetInputSlotState(ezInputSlot_KeyLeftWin) >= ezKeyState::Pressed ||
+                                      ezInputManager::GetInputSlotState(ezInputSlot_KeyRightWin) >= ezKeyState::Pressed);
 
     cfg.AddKeyEvent(ImGuiKey_LeftAlt, ezInputManager::GetInputSlotState(ezInputSlot_KeyLeftAlt) >= ezKeyState::Pressed);
     cfg.AddKeyEvent(ImGuiKey_RightAlt, ezInputManager::GetInputSlotState(ezInputSlot_KeyRightAlt) >= ezKeyState::Pressed);
@@ -474,9 +463,43 @@ void ezImgui::BeginFrame(const ezViewHandle& hView)
     cfg.AddKeyEvent(ImGuiKey_X, ezInputManager::GetInputSlotState(ezInputSlot_KeyX) >= ezKeyState::Pressed);
     cfg.AddKeyEvent(ImGuiKey_Y, ezInputManager::GetInputSlotState(ezInputSlot_KeyY) >= ezKeyState::Pressed);
     cfg.AddKeyEvent(ImGuiKey_Z, ezInputManager::GetInputSlotState(ezInputSlot_KeyZ) >= ezKeyState::Pressed);
+
+    const ezString sChars = ezInputManager::RetrieveLastCharacters(false);
+    cfg.AddInputCharactersUTF8(sChars.GetData());
+
+    if (bDeliverMouse)
+    {
+      float mousex, mousey;
+      if (ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0) != ezKeyState::Up)
+      {
+        ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0_PositionX, &mousex);
+        ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0_PositionY, &mousey);
+        cfg.AddMousePosEvent(cfg.DisplaySize.x * mousex, cfg.DisplaySize.y * mousey);
+        cfg.AddMouseButtonEvent(0, ezInputManager::GetInputSlotState(ezInputSlot_TouchPoint0) >= ezKeyState::Pressed);
+        cfg.AddMouseButtonEvent(1, false);
+        cfg.AddMouseButtonEvent(2, false);
+      }
+      else
+      {
+        ezInputManager::GetInputSlotState(ezInputSlot_MousePositionX, &mousex);
+        ezInputManager::GetInputSlotState(ezInputSlot_MousePositionY, &mousey);
+        cfg.AddMousePosEvent(cfg.DisplaySize.x * mousex, cfg.DisplaySize.y * mousey);
+        cfg.AddMouseButtonEvent(0, ezInputManager::GetInputSlotState(ezInputSlot_MouseButton0) >= ezKeyState::Pressed);
+        cfg.AddMouseButtonEvent(1, ezInputManager::GetInputSlotState(ezInputSlot_MouseButton1) >= ezKeyState::Pressed);
+        cfg.AddMouseButtonEvent(2, ezInputManager::GetInputSlotState(ezInputSlot_MouseButton2) >= ezKeyState::Pressed);
+      }
+
+      float fMouseWheel = 0;
+      if (ezInputManager::GetInputSlotState(ezInputSlot_MouseWheelDown) == ezKeyState::Pressed)
+        fMouseWheel = -1;
+      if (ezInputManager::GetInputSlotState(ezInputSlot_MouseWheelUp) == ezKeyState::Pressed)
+        fMouseWheel = +1;
+      cfg.AddMouseWheelEvent(0, fMouseWheel);
+    }
   }
   else
   {
+    cfg.ClearEventsQueue();
     cfg.ClearInputKeys();
   }
 

@@ -47,7 +47,9 @@ public:
   /// exit from that batch and rebind for each later batch. Do not retain context or draw-data pointers.
   /// View deletion and singleton destruction require joined UI/extraction work; the table mutex alone
   /// does not protect external ImGui calls. An invalid view leaves the binding null.
-  void SetCurrentContextForView(const ezViewHandle& hView);
+  /// The first bind in a view/frame selects mouse delivery before NewFrame. False cancels pending/current
+  /// mouse input but retains keyboard/text when input passing is enabled. Later binds do not change that policy.
+  void SetCurrentContextForView(const ezViewHandle& hView, bool bPassMouseInput = true);
 
   /// \brief Returns the value that was passed to BeginFrame(). Useful for positioning UI elements.
   ezSizeU32 GetCurrentWindowResolution() const { return m_CurrentWindowResolution; }
@@ -127,7 +129,7 @@ private:
   void Shutdown();
 
   ImGuiContext* CreateContext();
-  void BeginFrame(const ezViewHandle& hView);
+  void BeginFrame(const ezViewHandle& hView, bool bPassMouseInput);
   void GameApplicationEventHandler(const ezGameApplicationExecutionEvent& e);
   void ViewDeletedEventHandler(ezView* pView);
 
