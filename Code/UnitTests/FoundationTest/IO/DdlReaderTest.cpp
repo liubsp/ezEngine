@@ -178,6 +178,130 @@ static void TestDoc(const ezOpenDdlReader& doc, const char* szOriginal)
   TestEqual(szOriginal, recreation);
 }
 
+class FatalStringCallbackReader : public ezOpenDdlReader
+{
+public:
+  ezUInt32 m_uiStringValues = 0;
+  ezUInt32 m_uiPostFatalStringCallbacks = 0;
+  bool m_bFatalReported = false;
+
+private:
+  void OnBeginObject(ezStringView sType, ezStringView sName, bool bGlobalName) override
+  {
+    if (sType == "Skip")
+    {
+      SkipRestOfObject();
+      return;
+    }
+
+    ezOpenDdlReader::OnBeginObject(sType, sName, bGlobalName);
+  }
+
+  void OnPrimitiveString(ezUInt32 count, const ezStringView* pData, bool bThisIsAll) override
+  {
+    if (m_bFatalReported)
+    {
+      // Observe the forbidden callback without forwarding it into the reader's cleared tree.
+      ++m_uiPostFatalStringCallbacks;
+      return;
+    }
+
+    m_uiStringValues += count;
+    ezOpenDdlReader::OnPrimitiveString(count, pData, bThisIsAll);
+  }
+
+  void OnParsingError(ezStringView sMessage, bool bFatal, ezUInt32 uiLine, ezUInt32 uiColumn) override
+  {
+    m_bFatalReported |= bFatal;
+    ezOpenDdlReader::OnParsingError(sMessage, bFatal, uiLine, uiColumn);
+  }
+};
+
+EZ_CREATE_SIMPLE_TEST(IO, DdlFatalStringCallbacks)
+{
+  for (const char* szInput : {"string{\"", "string{\"content", "string{\"unfinished\\", "string{\"complete\",\"partial",
+         "Skip{string{\"", "Skip{string{\"unfinished\\"})
+  {
+    EZ_TEST_BLOCK(ezTestBlock::Enabled, szInput)
+    {
+      StringStream stream(szInput);
+      ezTestLogInterface log;
+      ezTestLogSystemScope logScope(&log);
+      log.ExpectMessage("Reached end of document before end of string was found", ezLogMsgType::ErrorMsg);
+
+      FatalStringCallbackReader doc;
+      EZ_TEST_BOOL(doc.ParseDocument(stream).Failed());
+      EZ_TEST_BOOL(doc.HadFatalParsingError());
+      EZ_TEST_BOOL(doc.m_bFatalReported);
+      EZ_TEST_INT(doc.m_uiPostFatalStringCallbacks, 0);
+      EZ_TEST_INT(doc.m_uiStringValues, ezStringUtils::FindSubString(szInput, "complete") != nullptr ? 1 : 0);
+    }
+  }
+
+  EZ_TEST_BLOCK(ezTestBlock::Enabled, "Completed skipped string preserves following values")
+  {
+    StringStream stream("Skip{string{\"ignored\\\"quoted\"}}string{\"kept\"}");
+    FatalStringCallbackReader doc;
+    if (!EZ_TEST_BOOL(doc.ParseDocument(stream).Succeeded()))
+      return;
+    EZ_TEST_BOOL(!doc.HadFatalParsingError());
+    EZ_TEST_INT(doc.m_uiStringValues, 1);
+    EZ_TEST_INT(doc.m_uiPostFatalStringCallbacks, 0);
+    const auto* pString = doc.GetRootElement()->GetFirstChild();
+    EZ_TEST_BOOL(pString != nullptr);
+    if (pString == nullptr)
+      return;
+    EZ_TEST_BOOL(pString->HasPrimitives(ezOpenDdlPrimitiveType::String));
+    if (!pString->HasPrimitives(ezOpenDdlPrimitiveType::String))
+      return;
+    EZ_TEST_STRING(pString->GetPrimitivesString()[0], "kept");
+  }
+}
+
+EZ_CREATE_SIMPLE_TEST(IO, DdlFatalPrimitiveBoundaries)
+{
+  for (const char* szInput : {"bool{?}", "int32{?}", "float{?}", "string{?}", "bool{true", "int32{1", "float{1", "Node{int32{1}"})
+  {
+    EZ_TEST_BLOCK(ezTestBlock::Enabled, szInput)
+    {
+      StringStream stream(szInput);
+      ezTestLogInterface log;
+      ezTestLogSystemScope logScope(&log);
+      log.ExpectMessage("Line", ezLogMsgType::ErrorMsg);
+
+      ezOpenDdlReader doc;
+      EZ_TEST_BOOL(doc.ParseDocument(stream).Failed());
+      EZ_TEST_BOOL(doc.HadFatalParsingError());
+    }
+  }
+}
+
+EZ_CREATE_SIMPLE_TEST(IO, DdlFatalFloatAtCacheBoundary)
+{
+  for (const char* szType : {"float", "double"})
+  {
+    EZ_TEST_BLOCK(ezTestBlock::Enabled, szType)
+    {
+      // An invalid literal must not fill and flush the cache after fatal cleanup.
+      constexpr ezUInt32 uiCacheSizeKB = 1;
+      const ezUInt32 uiValuesPerCache = uiCacheSizeKB * 1024 / (ezStringUtils::IsEqual(szType, "float") ? sizeof(float) : sizeof(double));
+      ezStringBuilder input(szType, "{");
+      for (ezUInt32 i = 0; i < uiValuesPerCache - 1; ++i)
+        input.Append("1,");
+      input.Append("?}");
+
+      StringStream stream(input.GetData());
+      ezTestLogInterface log;
+      ezTestLogSystemScope logScope(&log);
+      log.ExpectMessage("Malformed float literal", ezLogMsgType::ErrorMsg);
+
+      ezOpenDdlReader doc;
+      EZ_TEST_BOOL(doc.ParseDocument(stream, 0, &log, uiCacheSizeKB).Failed());
+      EZ_TEST_BOOL(doc.HadFatalParsingError());
+    }
+  }
+}
+
 EZ_CREATE_SIMPLE_TEST(IO, DdlReader)
 {
   EZ_TEST_BLOCK(ezTestBlock::Enabled, "Basics and Comments")

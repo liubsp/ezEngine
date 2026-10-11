@@ -805,6 +805,10 @@ void ezOpenDdlParser::ContinueString()
         SkipString();
       }
 
+      // Fatal error callbacks may already have discarded the reader's open state.
+      if (m_bHadFatalParsingError)
+        return;
+
       SkipWhitespace();
 
       if (!m_bSkippingMode)
