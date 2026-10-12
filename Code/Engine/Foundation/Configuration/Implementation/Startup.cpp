@@ -18,6 +18,15 @@ void ezStartup::AddApplicationTag(const char* szTag)
   s_ApplicationTags.PushBack(szTag);
 }
 
+void ezStartup::RemoveApplicationTag(const char* szTag)
+{
+  for (ezUInt32 i = s_ApplicationTags.GetCount(); i > 0; --i)
+  {
+    if (ezStringUtils::IsEqual_NoCase(s_ApplicationTags[i - 1], szTag))
+      s_ApplicationTags.RemoveAtAndCopy(i - 1);
+  }
+}
+
 bool ezStartup::HasApplicationTag(const char* szTag)
 {
   for (ezUInt32 i = 0; i < s_ApplicationTags.GetCount(); ++i)

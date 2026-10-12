@@ -8,21 +8,6 @@
 #include <Foundation/Application/Application.h>
 #include <Foundation/Utilities/CommandLineUtils.h>
 
-/// The port to serve MCP on.
-///
-/// This is the option a standalone game is launched with. It is spelled without the 'editor-' prefix
-/// that the editor's own option carries, because the editor forwards its entire command line to the
-/// engine process that runs the game: with a single name, both processes would read the same number and
-/// the second one to start would fail to bind.
-///
-/// There is deliberately no default. This plugin is mandatory and therefore loaded by every project, so
-/// a default would have every game and every ezEditorProcessor child open a port that nobody asked for.
-/// The server only exists when it was asked for by name.
-static ezCommandLineOptionInt s_opt_McpPort("_Mcp", "-mcpport",
-  "The port that this game process serves MCP on, on 127.0.0.1.\n"
-  "Without it - and without '-editor-mcpport' - no server is started at all.",
-  0, 0, 0xFFFF);
-
 /// The editor's port, read here only to derive one from it.
 ///
 /// Declared so that it shows up in app_command_line_options, and so that the +1 rule is stated in one
@@ -36,30 +21,10 @@ ezMcpServer* ezMcpEngineHost::s_pServer = nullptr;
 ezUInt64 ezMcpEngineHost::s_uiFrameCount = 0;
 bool ezMcpEngineHost::s_bQuitRequested = false;
 
-ezUInt16 ezMcpEngineHost::ResolvePort()
-{
-  const ezInt32 iOwnPort = s_opt_McpPort.GetOptionValue(ezCommandLineOption::LogMode::FirstTimeIfSpecified);
-
-  if (iOwnPort > 0)
-    return static_cast<ezUInt16>(iOwnPort);
-
-  const ezInt32 iEditorPort = s_opt_EditorMcpPort.GetOptionValue(ezCommandLineOption::LogMode::FirstTimeIfSpecified);
-
-  // The editor's port + 1. An agent that knows the editor's port can compute this one without being
-  // told, and nothing had to be added to the editor to pass it along.
-  if (iEditorPort > 0 && iEditorPort < 0xFFFF)
-    return static_cast<ezUInt16>(iEditorPort + 1);
-
-  return 0;
-}
-
 void ezMcpEngineHost::Startup()
 {
-  const ezUInt16 uiPort = ResolvePort();
-
-  if (uiPort == 0)
+  if (s_pServer != nullptr)
     return;
-
   ezGameApplicationBase* pApp = ezGameApplicationBase::GetGameApplicationBaseInstance();
 
   if (pApp == nullptr)
@@ -68,19 +33,38 @@ void ezMcpEngineHost::Startup()
     return;
   }
 
+  ezRuntimeControlOptions options;
+  const ezStatus parsed = ezRuntimeControlOptions::Parse(*ezCommandLineUtils::GetGlobalInstance(), options);
+  if (parsed.Failed())
+  {
+    pApp->ReportStartupFailure(parsed.GetMessageString().GetView());
+    return;
+  }
+  if (!options.m_bEnabled || pApp->ShouldApplicationQuit())
+    return;
+
+  s_uiFrameCount = 0;
+  s_bQuitRequested = false;
   s_pServer = EZ_DEFAULT_NEW(ezMcpServer, "ezEngine");
 
-  if (s_pServer->Start(uiPort).Failed())
+  if (s_pServer->Start(options.m_uiPort).Failed())
   {
-    // Most likely another process already holds the port - two games launched with the same '-mcpport',
-    // or an editor whose engine process derived the same number. Logged rather than fatal: the game
-    // itself is unaffected, and log_read is not reachable to explain it afterwards.
-    ezLog::Error("MCP: could not listen on port {}. The game runs without an MCP server.", uiPort);
-
     EZ_DEFAULT_DELETE(s_pServer);
+    if (options.m_bRequired)
+      pApp->ReportStartupFailure(ezFmt("Required MCP transport could not listen on port {}.", options.m_uiPort));
+    else
+      ezLog::Error("MCP: could not listen on port {}. The game runs without an MCP server.", options.m_uiPort);
     return;
   }
 
+  const ezStatus reported = pApp->ReportBoundControlPort(s_pServer->GetPort());
+  if (reported.Failed())
+  {
+    EZ_DEFAULT_DELETE(s_pServer);
+    pApp->ReportStartupFailure(reported.GetMessageString().GetView());
+    return;
+  }
+  ezLog::Info("MCP: listening on 127.0.0.1:{}.", s_pServer->GetPort());
   pApp->m_ExecutionEvents.AddEventHandler(&ezMcpEngineHost::ExecutionEventHandler);
 
   // The editor's engine process sleeps in its IPC wait until the editor sends it something, and an
@@ -94,18 +78,23 @@ void ezMcpEngineHost::Startup()
 
 void ezMcpEngineHost::Shutdown()
 {
-  if (s_pServer == nullptr)
-    return;
-
-  if (ezGameApplicationBase* pApp = ezGameApplicationBase::GetGameApplicationBaseInstance())
+  if (s_pServer != nullptr)
   {
-    pApp->m_ExecutionEvents.RemoveEventHandler(&ezMcpEngineHost::ExecutionEventHandler);
-    pApp->m_HasPendingExternalWork = {};
-  }
+    ezGameApplicationBase* pApp = ezGameApplicationBase::GetGameApplicationBaseInstance();
+    if (pApp != nullptr)
+    {
+      pApp->m_ExecutionEvents.RemoveEventHandler(&ezMcpEngineHost::ExecutionEventHandler);
+      pApp->m_HasPendingExternalWork = {};
+    }
 
-  // Stop() joins the transport thread, which finishes writing whatever response it was in the middle
-  // of. That is what makes it safe for app_quit to trigger shutdown one frame after being answered.
-  EZ_DEFAULT_DELETE(s_pServer);
+    // Stop() joins the reply-writing transport. Do not clear the report or destroy providers first.
+    EZ_DEFAULT_DELETE(s_pServer);
+    if (pApp != nullptr)
+      pApp->ClearBoundControlPort();
+  }
+  // Project providers must die while their DLLs are still loaded, including optional bind failure.
+  // Plugin unload occurs later, in reverse load order (project plugins before McpPlugin).
+  ezMcpToolRegistry::Clear();
 }
 
 void ezMcpEngineHost::RequestQuit()

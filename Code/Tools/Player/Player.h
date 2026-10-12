@@ -13,5 +13,5 @@ protected:
   virtual ezResult BeforeCoreSystemsStartup() override;
 
 private:
-  void DetermineProjectPath();
+  ezStatus DetermineProjectPath();
 };

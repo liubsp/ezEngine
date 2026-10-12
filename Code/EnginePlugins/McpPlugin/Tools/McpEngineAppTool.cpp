@@ -179,7 +179,7 @@ void ezMcpEngineAppTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_to
       "which is the normal state of the editor's engine process while nobody is playing the game - this fails after a "
       "few seconds rather than waiting forever; start play-the-game in the editor first.";
 
-    desc.m_sInputSchema = R"({"type":"object","properties":{"path":{"type":"string","description":"Absolute path to write to, including the file extension, which selects the format ('.png' unless there is a reason). Defaults to a generated name in the system temp folder."},"maxWidth":{"type":"number","description":"Downscale to at most this width, keeping the aspect ratio. Default 1280. Pass 0 for the full resolution."},"window":{"type":"number","description":"Which window to capture, as its index in app_info's 'windows'. Default 0."}}})";
+    desc.m_sInputSchema = R"({"type":"object","properties":{"path":{"type":"string","description":"Output path including the extension, which selects the format. Runtime-session paths must remain below that session; relative paths resolve there. Otherwise an absolute path is required. Defaults to a generated name in session storage, or the system temp folder without a session."},"maxWidth":{"type":"number","description":"Downscale to at most this width, keeping the aspect ratio. Default 1280. Pass 0 for the full resolution."},"window":{"type":"number","description":"Which window to capture, as its index in app_info's 'windows'. Default 0."}}})";
   }
 }
 
@@ -304,8 +304,7 @@ ezResult ezMcpEngineAppTool::BeginScreenshot(const ezVariantDictionary& argument
 
   if (windows.IsEmpty())
   {
-    out_result.SetError("This process has no window registered, so there is nothing to capture. That is normal for a "
-                        "process that was started without a graphics device.");
+    out_result.SetError("This process has no registered window. This tool captures window output only.");
     return EZ_FAILURE;
   }
 
@@ -331,13 +330,29 @@ ezResult ezMcpEngineAppTool::BeginScreenshot(const ezVariantDictionary& argument
 
   if (sPath.IsEmpty())
   {
-    // Into the temp folder, and named by frame, so that repeated calls do not overwrite each other and
-    // an agent can compare two frames without having to invent file names.
-    sPath = ezOSFile::GetTempDataFolder("Screenshots");
+    // Frame-named captures do not overwrite each other. Keep isolated outputs with their session;
+    // ordinary applications retain the existing temp-folder destination.
+    const auto* pApp = ezGameApplicationBase::GetGameApplicationBaseInstance();
+    if (pApp != nullptr && pApp->GetRuntimeSession().IsSelected())
+      sPath.Set(pApp->GetRuntimeSession().GetRoot(), "/appdata/Screenshots");
+    else
+      sPath = ezOSFile::GetTempDataFolder("Screenshots");
     sPath.AppendFormat("/{}_{}.png", ezProcess::GetCurrentProcessID(), ezMcpEngineHost::GetFrameCount());
   }
 
   sPath.MakeCleanPath();
+
+  if (const auto* pApp = ezGameApplicationBase::GetGameApplicationBaseInstance(); pApp != nullptr && pApp->GetRuntimeSession().IsSelected())
+  {
+    ezStringBuilder checkedPath;
+    const ezStatus pathStatus = pApp->GetRuntimeSession().ResolveOutputPath(sPath, checkedPath);
+    if (pathStatus.Failed())
+    {
+      out_result.SetError(pathStatus.GetMessageString());
+      return EZ_FAILURE;
+    }
+    sPath = checkedPath;
+  }
 
   if (!ezPathUtils::IsAbsolutePath(sPath))
   {

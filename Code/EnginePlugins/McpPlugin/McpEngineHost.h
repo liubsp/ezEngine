@@ -20,9 +20,8 @@ class EZ_MCPPLUGIN_DLL ezMcpEngineHost
 public:
   /// \brief Resolves the port, starts the server and subscribes to the frame loop.
   ///
-  /// Does nothing at all when no port was given - see the command line options in McpPlugin.cpp. That is
-  /// the normal case: this plugin is mandatory and therefore loaded by every project, so a game that was
-  /// not asked to serve MCP must not end up with an open port.
+  /// Does nothing without control intent (see ezRuntimeControlOptions). Loading this plugin alone
+  /// must not cause an application to open a listener.
   static void Startup();
 
   static void Shutdown();
@@ -42,9 +41,6 @@ public:
 
 private:
   static void ExecutionEventHandler(const ezGameApplicationExecutionEvent& e);
-
-  /// \brief Reads -mcpport, falling back to -editor-mcpport + 1. Returns 0 for 'do not serve'.
-  static ezUInt16 ResolvePort();
 
   static ezMcpServer* s_pServer;
   static ezUInt64 s_uiFrameCount;

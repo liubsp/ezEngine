@@ -48,21 +48,22 @@ namespace
     ezUInt8 m_uiUuid[VK_UUID_SIZE]; // Equal to VkPhysicalDeviceProperties::pipelineCacheUUID
   };
 
-  ezString GetPipelineCacheFilename(const vk::PhysicalDeviceProperties& deviceProperties)
+  ezString GetPipelineCacheFilename(const vk::PhysicalDeviceProperties& deviceProperties, ezStringView sCacheDirectory)
   {
     ezStringBuilder sCacheFilePath;
     ezString sAppName = ezApplication::GetApplicationInstance() ? ezApplication::GetApplicationInstance()->GetApplicationName().GetView() : "ezEngine"_ezsv;
+    const ezString directory = sCacheDirectory.IsEmpty() ? ezOSFile::GetUserDataFolder(sAppName) : ezString(sCacheDirectory);
 #if EZ_ENABLED(EZ_PLATFORM_ANDROID)
     // Be extra pedantic on Android and don't reuse caches on driver version changes, see https://zeux.io/2019/07/17/serializing-pipeline-cache/
     sCacheFilePath.SetFormat("{}/PipelineCache_{}_{}_{}.bin",
-      ezOSFile::GetUserDataFolder(sAppName),
+      directory,
       ezArgU(deviceProperties.vendorID, 8, true, 16, true),
       ezArgU(deviceProperties.deviceID, 8, true, 16, true),
       ezArgU(deviceProperties.driverVersion, 8, true, 16, true));
 #else
     // On desktop, we assume that vendors can actually write proper code and caches can be reused after driver updates.
     sCacheFilePath.SetFormat("{}/PipelineCache_{}_{}.bin",
-      ezOSFile::GetUserDataFolder(sAppName),
+      directory,
       ezArgU(deviceProperties.vendorID, 8, true, 16, true),
       ezArgU(deviceProperties.deviceID, 8, true, 16, true));
 #endif
@@ -286,7 +287,7 @@ ezResult ezResourceCacheVulkan::SavePipelineCache()
   }
   prefixHeader.m_uiDataHash = ezHashingUtils::xxHash64(pipelineCacheData.GetData(), dataSize);
 
-  ezString sCacheFilePath = GetPipelineCacheFilename(deviceProperties);
+  ezString sCacheFilePath = GetPipelineCacheFilename(deviceProperties, s_pDevice->GetDescription()->m_sPipelineCacheDirectory);
   ezStringBuilder sTempFilePath;
   sTempFilePath.SetFormat("{}_temp", sCacheFilePath);
   // Write to the temporary file first
@@ -311,7 +312,7 @@ ezResult ezResourceCacheVulkan::LoadPipelineCache(vk::PipelineCache& out_pipelin
   vk::PhysicalDeviceProperties deviceProperties = s_pDevice->GetVulkanPhysicalDevice().getProperties();
 
   // Try to load the pipeline cache from file
-  ezString cacheFilePath = GetPipelineCacheFilename(deviceProperties);
+  ezString cacheFilePath = GetPipelineCacheFilename(deviceProperties, s_pDevice->GetDescription()->m_sPipelineCacheDirectory);
 
   ezOSFile file;
   EZ_SUCCEED_OR_RETURN(file.Open(cacheFilePath, ezFileOpenMode::Read, ezFileShareMode::Default));
@@ -388,4 +389,3 @@ bool ezResourceCacheVulkan::ResourceCacheHash::Equal(const FramebufferKey& a, co
 {
   return a.m_renderPass == b.m_renderPass && a.m_frameBuffer == b.m_frameBuffer;
 }
-

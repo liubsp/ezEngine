@@ -32,6 +32,11 @@ editor fallback of 7391 applies only when that option is supplied without a valu
 Its engine child uses editor port + 1, or explicit **`-mcpport <port>`** to override that derivation.
 A standalone game uses `-mcpport <port>`. MCP and telemetry opt-ins are independent.
 
+An explicit game `-mcpport 0` requests an ephemeral loopback port, reported through
+`ezGameApplicationBase::GetBoundControlPort()`. Add `-mcpRequired` to fail startup if transport
+loading or binding fails; it requires an explicit own port. See
+[isolated runtime sessions](RuntimeSessions.md) for private writable storage and provider lifetime.
+
 These defaults prevent unnecessary listeners; they do not change firewall permissions, dismiss
 existing security prompts, or provide stable executable identity across changing output paths.
 Intentionally enabled services may still require network permission.

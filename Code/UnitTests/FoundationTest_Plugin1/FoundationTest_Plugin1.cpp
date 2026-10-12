@@ -72,6 +72,8 @@ EZ_BEGIN_SUBSYSTEM_DECLARATION(PluginGroup_Plugin1, TestSubSystem1)
 
   ON_CORESYSTEMS_SHUTDOWN
   {
+    if (auto* pCount = static_cast<ezCVarInt*>(ezCVar::FindCVarByName("TestPlugin1CoreShutdownCount")))
+      *pCount = *pCount + 1;
   }
 
   ON_HIGHLEVELSYSTEMS_STARTUP

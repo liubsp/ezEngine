@@ -19,10 +19,12 @@ CreatorFuncInfo* GetCreatorFuncInfo(ezStringView sRendererName)
     ezStringBuilder sPluginName = "ezRenderer";
     sPluginName.Append(sRendererName);
 
-    EZ_VERIFY(ezPlugin::LoadPlugin(sPluginName).Succeeded(), "Renderer plugin '{}' not found", sPluginName);
+    if (ezPlugin::LoadPlugin(sPluginName).Failed())
+      return nullptr;
 
     pFuncInfo = s_CreatorFuncs.GetValue(sRendererName);
-    EZ_ASSERT_DEV(pFuncInfo != nullptr, "Renderer '{}' is not registered", sRendererName);
+    if (pFuncInfo == nullptr)
+      ezLog::Error("Renderer '{}' is not registered by plugin '{}'.", sRendererName, sPluginName);
   }
 
   return pFuncInfo;

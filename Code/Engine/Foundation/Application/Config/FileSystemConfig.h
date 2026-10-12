@@ -12,6 +12,9 @@ public:
   ezResult Save(ezStringView sPath = s_sConfigFile);
   void Load(ezStringView sPath = s_sConfigFile);
 
+  /// Like Load, but reports missing or malformed configuration to startup owners that cannot continue.
+  ezResult LoadChecked(ezStringView sPath = s_sConfigFile);
+
   /// \brief Sets up the data directories that were configured or loaded into this object
   void Apply();
 

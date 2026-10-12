@@ -3,8 +3,11 @@
 #include <Core/Input/DeviceTypes/MouseKeyboard.h>
 #include <Core/Input/InputManager.h>
 #include <Foundation/Configuration/Startup.h>
+#include <Foundation/IO/OSFile.h>
 #include <Foundation/Logging/Log.h>
 #include <Foundation/Utilities/CommandLineOptions.h>
+
+#include <cstdio>
 
 // this injects the main function
 EZ_APPLICATION_ENTRY_POINT(ezPlayerApplication);
@@ -23,30 +26,46 @@ ezResult ezPlayerApplication::BeforeCoreSystemsStartup()
 {
   // show the command line options, if help is requested
   {
-    // since this is a GUI application (not a console app), printf has no effect
-    // therefore we have to show the command line options with a message box
-
     ezStringBuilder cmdHelp;
     if (ezCommandLineOption::LogAvailableOptionsToBuffer(cmdHelp, ezCommandLineOption::LogAvailableModes::IfHelpRequested))
     {
-      ezLog::OsMessageBox(cmdHelp);
-      SetReturnCode(-1);
+      if (ezRuntimeStartup::IsUnattended(*ezCommandLineUtils::GetGlobalInstance()))
+      {
+        // File-backed inherited handles also work for the GUI-subsystem Player; never create a dialog.
+        fprintf(stdout, "%s\n", cmdHelp.GetData());
+        fflush(stdout);
+        SetReturnCode(0);
+      }
+      else
+      {
+        ezLog::OsMessageBox(cmdHelp);
+        SetReturnCode(-1);
+      }
       return EZ_FAILURE;
     }
   }
 
+  // SDK/project discovery reads only. Reject invalid launch arguments before the base opens logs,
+  // acquires a session directory, starts subsystems or loads plugins.
+  const ezStatus projectStatus = DetermineProjectPath();
+  if (projectStatus.Failed())
+  {
+    ReportStartupFailure(projectStatus.GetMessageString().GetView());
+    return EZ_FAILURE;
+  }
   ezStartup::AddApplicationTag("player");
-
-  EZ_SUCCEED_OR_RETURN(SUPER::BeforeCoreSystemsStartup());
-
-  DetermineProjectPath();
-
-  return EZ_SUCCESS;
+  return SUPER::BeforeCoreSystemsStartup();
 }
 
-void ezPlayerApplication::DetermineProjectPath()
+ezStatus ezPlayerApplication::DetermineProjectPath()
 {
-  ezStringBuilder sProjectPath = opt_Project.GetOptionValue(ezCommandLineOption::LogMode::FirstTime);
+  const auto& commandLine = *ezCommandLineUtils::GetGlobalInstance();
+  ezStringView project, scene;
+  EZ_SUCCEED_OR_RETURN(ezRuntimeStartup::GetSingleOption(commandLine, "-project", project));
+  EZ_SUCCEED_OR_RETURN(ezRuntimeStartup::GetSingleOption(commandLine, "-scene", scene));
+  ezStringBuilder sProjectPath(project);
+  if (ezFileSystem::DetectSdkRootDirectory().Failed())
+    return ezStatus("Cannot locate the SDK root for Player.");
 
 #if EZ_DISABLED(EZ_SUPPORTS_UNRESTRICTED_FILE_ACCESS)
   // We can't specify command line arguments on many platforms so the project must be defined by ezFileserve.
@@ -56,30 +75,26 @@ void ezPlayerApplication::DetermineProjectPath()
   if (sProjectPath.IsEmpty())
   {
     m_sAppProjectPath = ">project";
-    return;
+    return EZ_SUCCESS;
   }
 #endif
 
   if (sProjectPath.IsEmpty())
   {
-    const ezStringBuilder sScenePath = opt_Scene.GetOptionValue(ezCommandLineOption::LogMode::FirstTime);
+    const ezStringBuilder sScenePath(scene);
 
     // project path is empty, need to extract it from the scene path
 
     if (!sScenePath.IsAbsolutePath())
     {
       // scene path is not absolute -> can't extract project path
-      m_sAppProjectPath = ezFileSystem::GetSdkRootDirectory();
-      SetReturnCode(1);
-      return;
+      return ezStatus("Provide -project or an absolute -scene path from which Player can locate ezProject.");
     }
 
     if (ezFileSystem::FindFolderWithSubPath(sProjectPath, sScenePath, "ezProject", "ezSdkRoot.txt").Failed())
     {
       // couldn't find the 'ezProject' file in any parent folder of the scene
-      m_sAppProjectPath = ezFileSystem::GetSdkRootDirectory();
-      SetReturnCode(1);
-      return;
+      return ezStatus("Cannot locate ezProject above the supplied scene path.");
     }
   }
   else if (!ezPathUtils::IsAbsolutePath(sProjectPath))
@@ -91,13 +106,11 @@ void ezPlayerApplication::DetermineProjectPath()
   sProjectPath.MakeCleanPath();
   sProjectPath.TrimWordEnd("/ezProject");
 
-  if (sProjectPath.IsEmpty())
+  if (sProjectPath.IsEmpty() || !ezOSFile::ExistsDirectory(sProjectPath))
   {
-    m_sAppProjectPath = ezFileSystem::GetSdkRootDirectory();
-    SetReturnCode(1);
-    return;
+    return ezStatus("The supplied Player project directory does not exist.");
   }
 
-  // store it now, even if it fails, for error reporting
   m_sAppProjectPath = sProjectPath;
+  return EZ_SUCCESS;
 }

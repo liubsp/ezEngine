@@ -244,6 +244,8 @@ ezStringView ezGameApplication::GetActiveRenderer()
 void ezGameApplication::Init_SetupGraphicsDevice()
 {
   ezGALDeviceCreationDescription DeviceInit;
+  if (GetRuntimeSession().IsSelected())
+    DeviceInit.m_sPipelineCacheDirectory = ezStringBuilder(GetRuntimeSession().GetRoot(), "/shadercache");
 
   DeviceInit.m_bDebugDevice = opt_RendererDebugDevice.GetOptionValue(ezCommandLineOption::LogMode::Never);
 #if EZ_ENABLED(EZ_COMPILE_FOR_DEBUG)
@@ -261,10 +263,24 @@ void ezGameApplication::Init_SetupGraphicsDevice()
     {
       ezStringView sRendererName = GetRendererNameFromCommandLine();
       pDevice = ezGALDeviceFactory::CreateDevice(sRendererName, ezFoundation::GetDefaultAllocator(), DeviceInit);
-      EZ_ASSERT_DEV(pDevice != nullptr, "Device implementation for '{}' not found", sRendererName);
+      if (pDevice == nullptr)
+      {
+        ReportStartupFailure(ezFmt("Device implementation for '{}' not found.", sRendererName));
+        return;
+      }
     }
 
-    EZ_VERIFY(pDevice->Init() == EZ_SUCCESS, "Graphics device creation failed!");
+    if (pDevice == nullptr)
+    {
+      ReportStartupFailure("The graphics device creator returned no device.");
+      return;
+    }
+    if (pDevice->Init().Failed())
+    {
+      EZ_DEFAULT_DELETE(pDevice);
+      ReportStartupFailure("Graphics device creation failed.");
+      return;
+    }
     ezGALDevice::SetDefaultDevice(pDevice);
   }
 
@@ -281,6 +297,11 @@ void ezGameApplication::Init_LoadRequiredPlugins()
   const char* szShaderModel = "";
   const char* szShaderCompiler = "";
   ezGALDeviceFactory::GetShaderModelAndCompiler(sRendererName, szShaderModel, szShaderCompiler);
+  if (ezStringUtils::IsNullOrEmpty(szShaderModel))
+  {
+    ReportStartupFailure(ezFmt("Cannot load renderer configuration for '{}'.", sRendererName));
+    return;
+  }
   ezShaderManager::Configure(szShaderModel, true);
 
 #if EZ_ENABLED(EZ_COMPILE_FOR_DEVELOPMENT)
@@ -294,6 +315,11 @@ void ezGameApplication::Init_LoadRequiredPlugins()
   {
     if (ezPlugin::LoadPlugin("ezMcpPlugin", ezPluginLoadFlags::PluginIsOptional).Failed())
     {
+      if (IsControlRequired())
+      {
+        ReportStartupFailure("Required MCP transport plugin 'ezMcpPlugin' could not be loaded.");
+        return;
+      }
       ezLog::Warning("An MCP port was given on the command line, but 'ezMcpPlugin' could not be loaded.");
     }
   }
@@ -307,6 +333,11 @@ void ezGameApplication::Init_LoadRequiredPlugins()
 
   if (ezPlugin::LoadPlugin(szShaderCompiler, ezPluginLoadFlags::PluginIsOptional).Failed())
   {
+    if (GetRuntimeSession().IsSelected())
+    {
+      ReportStartupFailure(ezFmt("Cannot load shader compiler '{}' for the private runtime cache.", szShaderCompiler));
+      return;
+    }
     ezLog::Warning("Shader compiler plugin '{}' not found", szShaderCompiler);
   }
 }

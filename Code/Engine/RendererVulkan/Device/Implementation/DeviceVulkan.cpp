@@ -387,6 +387,31 @@ ezStringView ezGALDeviceVulkan::GetRendererPlatform()
 
 ezResult ezGALDeviceVulkan::InitPlatform()
 {
+  // Every status-returning failure is before cache/pool initialization (the last fallible step is
+  // VMA creation, which rolls itself back). Release the raw handles if application startup rejects
+  // the device instead of assuming an assertion terminates the process.
+  bool bInitialized = false;
+  auto cleanupFailedInitialization = [&]()
+  {
+    if (!bInitialized)
+    {
+      if (m_Device)
+      {
+        m_Device.destroy();
+        m_Device = nullptr;
+      }
+      if (m_Instance)
+      {
+#if EZ_ENABLED(EZ_COMPILE_FOR_DEVELOPMENT)
+        if (m_DebugMessenger && m_DispatchContext.vkDestroyDebugUtilsMessengerEXT != nullptr)
+          m_Instance.destroyDebugUtilsMessengerEXT(m_DebugMessenger, nullptr, m_DispatchContext);
+#endif
+        m_Instance.destroy();
+        m_Instance = nullptr;
+      }
+    }
+  };
+  EZ_SCOPE_EXIT(cleanupFailedInitialization());
   EZ_LOG_BLOCK("ezGALDeviceVulkan::InitPlatform");
 
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
@@ -486,7 +511,12 @@ ezResult ezGALDeviceVulkan::InitPlatform()
     }
     if (!m_Instance)
     {
-      m_Instance = vk::createInstance(instanceCreateInfo);
+      VK_SUCCEED_OR_RETURN_EZ_FAILURE(vk::createInstance(&instanceCreateInfo, nullptr, &m_Instance));
+    }
+    if (!m_Instance)
+    {
+      ezLog::Error("Failed to create Vulkan instance!");
+      return EZ_FAILURE;
     }
 #if VULKAN_HPP_DISPATCH_LOADER_DYNAMIC == 1
     vk::detail::defaultDispatchLoaderDynamic.init(m_Instance);
@@ -496,15 +526,9 @@ ezResult ezGALDeviceVulkan::InitPlatform()
     if (m_Extensions.m_bDebugUtils)
     {
       vk::DebugUtilsMessengerCreateInfoEXT createInfo(debugCreateInfo);
-      m_DebugMessenger = m_Instance.createDebugUtilsMessengerEXT(createInfo, nullptr, m_DispatchContext);
+      VK_SUCCEED_OR_RETURN_EZ_FAILURE(m_Instance.createDebugUtilsMessengerEXT(&createInfo, nullptr, &m_DebugMessenger, m_DispatchContext));
     }
 #endif
-
-    if (!m_Instance)
-    {
-      ezLog::Error("Failed to create Vulkan instance!");
-      return EZ_FAILURE;
-    }
   }
 
   if (pInitInterface)
@@ -700,6 +724,7 @@ ezResult ezGALDeviceVulkan::InitPlatform()
     { return CreateSwapChain([this, &desc](ezAllocator* pAllocator) -> ezGALSwapChain*
         { return EZ_NEW(pAllocator, ezGALSwapChainVulkan, desc); }); });
 
+  bInitialized = true;
   return EZ_SUCCESS;
 }
 

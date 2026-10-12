@@ -94,6 +94,10 @@ public:
   /// editor, editorprocessor, fileserve, etc.
   static void AddApplicationTag(const char* szTag);
 
+  /// Removes an application-owned tag after its subsystems have shut down. Like adding tags, this
+  /// is a startup/shutdown-thread operation, not a concurrent runtime configuration interface.
+  static void RemoveApplicationTag(const char* szTag);
+
   /// \brief Query whether a tag was added with AddApplicationTag()
   static bool HasApplicationTag(const char* szTag);
 

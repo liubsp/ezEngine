@@ -69,7 +69,9 @@ ezResult ezMcpSocket::Listen(ezUInt16 uiPort)
   }
   else
   {
-    m_uiPort = uiPort;
+    ezLog::Error("MCP: Could not determine the bound port: {}", errno);
+    close(iSocket);
+    return EZ_FAILURE;
   }
 
   m_iSocket = iSocket;

@@ -17,7 +17,10 @@
 #include <Foundation/Time/Clock.h>
 #include <Foundation/Time/Stopwatch.h>
 #include <Foundation/Time/Timestamp.h>
+#include <Foundation/Utilities/CommandLineUtils.h>
 #include <Texture/Image/Image.h>
+
+#include <cstdio>
 
 ezGameApplicationBase* ezGameApplicationBase::s_pGameApplicationBaseInstance = nullptr;
 
@@ -31,7 +34,59 @@ ezGameApplicationBase::ezGameApplicationBase(ezStringView sAppName)
 
 ezGameApplicationBase::~ezGameApplicationBase()
 {
+  if (m_RuntimeSession.IsSelected())
+    ezStartup::RemoveApplicationTag("runtime-session");
   s_pGameApplicationBaseInstance = nullptr;
+}
+
+ezStatus ezGameApplicationBase::ConfigureRuntimeSession(ezStringView sRoot)
+{
+  if (m_bStartupStarted)
+  {
+    ReportStartupFailure("Runtime session must be selected before startup.");
+    return ezStatus("Runtime session must be selected before startup.");
+  }
+  const ezStatus status = m_RuntimeSession.Configure(sRoot, *ezCommandLineUtils::GetGlobalInstance());
+  if (status.Failed())
+    ReportStartupFailure(status.GetMessageString().GetView());
+  else
+    ezStartup::AddApplicationTag("runtime-session");
+  return status;
+}
+
+ezStatus ezGameApplicationBase::ConfigureRuntimeStartup()
+{
+  EZ_SUCCEED_OR_RETURN(ezRuntimeControlOptions::Parse(*ezCommandLineUtils::GetGlobalInstance(), m_RuntimeControlOptions));
+#if EZ_DISABLED(EZ_COMPILE_FOR_DEVELOPMENT)
+  if (IsControlRequired())
+    return ezStatus("Required MCP control is only supported in Development builds.");
+#endif
+  return EZ_SUCCESS;
+}
+
+void ezGameApplicationBase::ReportStartupFailure(const ezFormatString& message)
+{
+  ezStringBuilder storage;
+  const char* szMessage = message.GetTextCStr(storage);
+  fprintf(stderr, "Startup failed: %s\n", szMessage);
+  fflush(stderr);
+  ezLog::Error("Startup failed: {}", szMessage);
+  if (GetReturnCode() == 0)
+    SetReturnCode(1);
+  QuitApplication();
+}
+
+ezStatus ezGameApplicationBase::ReportBoundControlPort(ezUInt16 uiPort)
+{
+  if (uiPort == 0 || m_uiBoundControlPort != 0)
+    return ezStatus("The bound control port must be nonzero and can only be reported once.");
+  m_uiBoundControlPort = uiPort;
+  return EZ_SUCCESS;
+}
+
+void ezGameApplicationBase::ClearBoundControlPort()
+{
+  m_uiBoundControlPort = 0;
 }
 
 void AppendCurrentTimestamp(ezStringBuilder& out_sString)
@@ -312,6 +367,16 @@ void ezGameApplicationBase::ActivateGameStateAtStartup()
 
 ezResult ezGameApplicationBase::BeforeCoreSystemsStartup()
 {
+  m_bStartupStarted = true;
+  const ezStatus controlStatus = ConfigureRuntimeStartup();
+  if (controlStatus.Failed())
+  {
+    ReportStartupFailure(controlStatus.GetMessageString().GetView());
+    return EZ_FAILURE;
+  }
+  if (ShouldApplicationQuit())
+    return EZ_FAILURE;
+
   ezStartup::AddApplicationTag("runtime");
 
   ExecuteBaseInitFunctions();
@@ -334,6 +399,12 @@ void ezGameApplicationBase::AfterCoreSystemsStartup()
   }
 
   ezStartup::StartupHighLevelSystems();
+
+  // MCP starts as a high-level subsystem. Binding failure must not activate a fallback game/window.
+  if (IsControlRequired() && GetBoundControlPort() == 0 && !ShouldApplicationQuit())
+    ReportStartupFailure("Required MCP transport did not report a bound port.");
+  if (ShouldApplicationQuit())
+    return;
 
   ActivateGameStateAtStartup();
 }

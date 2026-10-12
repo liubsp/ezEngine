@@ -97,6 +97,11 @@ ezResult ezApplicationPluginConfig::Save(ezStringView sPath) const
 
 void ezApplicationPluginConfig::Load(ezStringView sPath)
 {
+  LoadChecked(sPath).IgnoreResult();
+}
+
+ezResult ezApplicationPluginConfig::LoadChecked(ezStringView sPath)
+{
   EZ_LOG_BLOCK("ezApplicationPluginConfig::Load()");
 
   m_Plugins.Clear();
@@ -105,14 +110,14 @@ void ezApplicationPluginConfig::Load(ezStringView sPath)
   if (file.Open(sPath).Failed())
   {
     ezLog::Warning("Could not open plugins config file '{0}'", sPath);
-    return;
+    return EZ_FAILURE;
   }
 
   ezOpenDdlReader reader;
   if (reader.ParseDocument(file, 0, ezLog::GetThreadLocalLogSystem()).Failed())
   {
     ezLog::Error("Failed to parse plugins config file '{0}'", sPath);
-    return;
+    return EZ_FAILURE;
   }
 
   const ezOpenDdlReaderElement* pTree = reader.GetRootElement();
@@ -140,6 +145,7 @@ void ezApplicationPluginConfig::Load(ezStringView sPath)
     // this prevents duplicates
     AddPlugin(cfg);
   }
+  return EZ_SUCCESS;
 }
 
 void ezApplicationPluginConfig::Apply()

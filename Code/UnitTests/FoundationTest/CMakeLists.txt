@@ -24,6 +24,7 @@ target_link_libraries(${PROJECT_NAME}
 add_dependencies(${PROJECT_NAME}
   FoundationTest_Plugin1
   FoundationTest_Plugin2
+  FoundationTest_PluginMissingDependency
 )
 
 ez_ci_add_test(${PROJECT_NAME})

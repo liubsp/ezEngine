@@ -36,19 +36,30 @@ ezString ezGameApplicationBase::GetProjectDataDirectoryPath() const
 
 void ezGameApplicationBase::ExecuteInitFunctions()
 {
-  Init_PlatformProfile_SetPreferred();
-  Init_ConfigureTelemetry();
-  Init_FileSystem_SetSpecialDirs();
-  Init_LoadRequiredPlugins();
-  Init_ConfigureAssetManagement();
-  Init_FileSystem_ConfigureDataDirs();
-  Init_LoadWorldModuleConfig();
-  Init_LoadProjectPlugins();
-  Init_PlatformProfile_LoadForRuntime();
-  Init_ConfigureTags();
-  Init_ConfigureCVars();
-  Init_SetupGraphicsDevice();
-  Init_SetupDefaultResources();
+  // Preserve the virtual void hooks, but honor failure/quit between every stage, including plugins
+  // that request quit from startup callbacks. No later device or game-state initialization follows.
+  using InitFunction = void (ezGameApplicationBase::*)();
+  const InitFunction functions[] = {
+    &ezGameApplicationBase::Init_PlatformProfile_SetPreferred,
+    &ezGameApplicationBase::Init_ConfigureTelemetry,
+    &ezGameApplicationBase::Init_FileSystem_SetSpecialDirs,
+    &ezGameApplicationBase::Init_LoadRequiredPlugins,
+    &ezGameApplicationBase::Init_ConfigureAssetManagement,
+    &ezGameApplicationBase::Init_FileSystem_ConfigureDataDirs,
+    &ezGameApplicationBase::Init_LoadWorldModuleConfig,
+    &ezGameApplicationBase::Init_LoadProjectPlugins,
+    &ezGameApplicationBase::Init_PlatformProfile_LoadForRuntime,
+    &ezGameApplicationBase::Init_ConfigureTags,
+    &ezGameApplicationBase::Init_ConfigureCVars,
+    &ezGameApplicationBase::Init_SetupGraphicsDevice,
+    &ezGameApplicationBase::Init_SetupDefaultResources,
+  };
+  for (InitFunction function : functions)
+  {
+    if (ShouldApplicationQuit())
+      return;
+    (this->*function)();
+  }
 }
 
 void ezGameApplicationBase::Init_PlatformProfile_SetPreferred()
@@ -122,59 +133,91 @@ void ezGameApplicationBase::Init_LoadRequiredPlugins()
 
 void ezGameApplicationBase::Init_FileSystem_ConfigureDataDirs()
 {
-  // ">appdir/" and ">user/" are built-in special directories
-  // see ezFileSystem::ResolveSpecialDirectory
+  if (GetRuntimeSession().IsSelected())
+  {
+    Init_FileSystem_ConfigureSessionDataDirs();
+    if (ShouldApplicationQuit())
+      return;
+  }
+  else
+  {
+    // ">appdir/" and ">user/" are built-in special directories
+    // see ezFileSystem::ResolveSpecialDirectory
 
-  const ezStringBuilder sUserDataPath(">user/", GetApplicationName());
+    const ezStringBuilder sUserDataPath(">user/", GetApplicationName());
 
-  ezFileSystem::CreateDirectoryStructure(sUserDataPath).AssertSuccess();
+    ezFileSystem::CreateDirectoryStructure(sUserDataPath).AssertSuccess();
 
-  ezString writableBinRoot = ">appdir/";
-  ezString shaderCacheRoot = ">sdk/Output/";
+    ezString writableBinRoot = ">appdir/";
+    ezString shaderCacheRoot = ">sdk/Output/";
 
 #if EZ_DISABLED(EZ_SUPPORTS_UNRESTRICTED_FILE_ACCESS)
-  // On platforms where this is disabled, one can usually only write to the user directory
-  // e.g. on mobile platforms
-  writableBinRoot = sUserDataPath;
+    // On platforms where this is disabled, one can usually only write to the user directory
+    // e.g. on mobile platforms
+    writableBinRoot = sUserDataPath;
 #endif
 
-  ezFileSystem::CreateDirectoryStructure(shaderCacheRoot).IgnoreResult();
+    ezFileSystem::CreateDirectoryStructure(shaderCacheRoot).IgnoreResult();
 
-  // for absolute paths, read-only
-  ezFileSystem::AddDataDirectory("", "GameApplicationBase", ":", ezDataDirUsage::ReadOnly).AssertSuccess();
+    // for absolute paths, read-only
+    ezFileSystem::AddDataDirectory("", "GameApplicationBase", ":", ezDataDirUsage::ReadOnly).AssertSuccess();
 
-  // ":bin/" : writing to the binary directory
-  ezFileSystem::AddDataDirectory(writableBinRoot, "GameApplicationBase", "bin", ezDataDirUsage::AllowWrites).AssertSuccess();
+    // ":bin/" : writing to the binary directory
+    ezFileSystem::AddDataDirectory(writableBinRoot, "GameApplicationBase", "bin", ezDataDirUsage::AllowWrites).AssertSuccess();
 
-  // ":shadercache/" for reading and writing shader files
+    // ":shadercache/" for reading and writing shader files
 #if EZ_DISABLED(EZ_SUPPORTS_UNRESTRICTED_FILE_ACCESS)
-  ezFileSystem::AddDataDirectory(shaderCacheRoot, "GameApplicationBase", "shadercache", ezDataDirUsage::ReadOnly).AssertSuccess();
+    ezFileSystem::AddDataDirectory(shaderCacheRoot, "GameApplicationBase", "shadercache", ezDataDirUsage::ReadOnly).AssertSuccess();
 #else
-  ezFileSystem::AddDataDirectory(shaderCacheRoot, "GameApplicationBase", "shadercache", ezDataDirUsage::AllowWrites).AssertSuccess();
+    ezFileSystem::AddDataDirectory(shaderCacheRoot, "GameApplicationBase", "shadercache", ezDataDirUsage::AllowWrites).AssertSuccess();
 #endif
 
-  // ":appdata/" for reading and writing app user data
-  ezFileSystem::AddDataDirectory(sUserDataPath, "GameApplicationBase", "appdata", ezDataDirUsage::AllowWrites).AssertSuccess();
+    // ":appdata/" for reading and writing app user data
+    ezFileSystem::AddDataDirectory(sUserDataPath, "GameApplicationBase", "appdata", ezDataDirUsage::AllowWrites).AssertSuccess();
+  }
 
   // ":base/" for reading the core engine files
-  ezFileSystem::AddDataDirectory(GetBaseDataDirectoryPath(), "GameApplicationBase", "base", ezDataDirUsage::ReadOnly).IgnoreResult();
+  const ezResult baseMounted = ezFileSystem::AddDataDirectory(GetBaseDataDirectoryPath(), "GameApplicationBase", "base", ezDataDirUsage::ReadOnly);
+  if (GetRuntimeSession().IsSelected() && baseMounted.Failed())
+  {
+    ReportStartupFailure("Cannot mount the runtime base resources.");
+    return;
+  }
 
   {
     // the default config path is ":project/...", which would require the project data directory to be mounted already,
     // but that only happens further below, so the path has to be resolved to an absolute one instead
     // (the ":" data directory above is what makes absolute paths readable)
     ezStringBuilder sConfigFile;
-    ezFileSystem::ResolveSpecialDirectory(GetProjectDataDirectoryPath(), sConfigFile).IgnoreResult();
+    const ezResult resolvedProject = ezFileSystem::ResolveSpecialDirectory(GetProjectDataDirectoryPath(), sConfigFile);
+    if (GetRuntimeSession().IsSelected() && resolvedProject.Failed())
+    {
+      ReportStartupFailure("Cannot resolve the runtime project directory.");
+      return;
+    }
     sConfigFile.AppendPath("RuntimeConfigs/DataDirectories.ddl");
 
     ezApplicationFileSystemConfig appFileSystemConfig;
-    appFileSystemConfig.Load(sConfigFile);
+    const ezResult loadedConfig = appFileSystemConfig.LoadChecked(sConfigFile);
+    if (GetRuntimeSession().IsSelected() && loadedConfig.Failed())
+    {
+      ReportStartupFailure("Cannot load runtime data-directory configuration.");
+      return;
+    }
 
     // get rid of duplicates that we already hard-coded above
     for (ezUInt32 i = appFileSystemConfig.m_DataDirs.GetCount(); i > 0; --i)
     {
-      const ezString name = appFileSystemConfig.m_DataDirs[i - 1].m_sRootName;
-      if (name.IsEqual_NoCase(":") || name.IsEqual_NoCase("bin") || name.IsEqual_NoCase("shadercache") || name.IsEqual_NoCase("appdata") || name.IsEqual_NoCase("base"))
+      ezStringBuilder name = appFileSystemConfig.m_DataDirs[i - 1].m_sRootName;
+      bool bAbsoluteRoot = name.IsEqual_NoCase(":");
+      if (GetRuntimeSession().IsSelected())
+      {
+        const bool bNamedRoot = !name.IsEmpty();
+        ezFileSystem::CleanUpRootName(name);
+        bAbsoluteRoot = bNamedRoot && name.IsEmpty();
+        appFileSystemConfig.m_DataDirs[i - 1].m_sRootName = name;
+      }
+      if (bAbsoluteRoot || name.IsEqual_NoCase("bin") || name.IsEqual_NoCase("shadercache") || name.IsEqual_NoCase("appdata") || name.IsEqual_NoCase("base"))
       {
         appFileSystemConfig.m_DataDirs.RemoveAtAndCopy(i - 1);
       }
@@ -194,7 +237,8 @@ void ezGameApplicationBase::Init_FileSystem_ConfigureDataDirs()
       if (name.IsEqual_NoCase("project"))
       {
         uiProjectIdx = i;
-        break;
+        appFileSystemConfig.m_DataDirs[i].m_sDataDirSpecialPath = GetProjectDataDirectoryPath();
+        appFileSystemConfig.m_DataDirs[i].m_bWritable = false;
       }
     }
 
@@ -212,7 +256,42 @@ void ezGameApplicationBase::Init_FileSystem_ConfigureDataDirs()
     appFileSystemConfig.m_DataDirs[uiProjectIdx].m_sDataDirSpecialPath = GetProjectDataDirectoryPath();
     appFileSystemConfig.m_DataDirs[uiProjectIdx].m_bWritable = false;
 
-    appFileSystemConfig.Apply();
+    if (GetRuntimeSession().IsSelected())
+    {
+      // Validate the complete normalized configuration before mounting any configured resources.
+      for (const auto& config : appFileSystemConfig.m_DataDirs)
+      {
+        if (!config.m_bWritable)
+          continue;
+        ezStringBuilder absolutePath;
+        if (ezFileSystem::ResolveSpecialDirectory(config.m_sDataDirSpecialPath, absolutePath).Failed())
+        {
+          ReportStartupFailure("Cannot resolve a configured writable runtime mount.");
+          return;
+        }
+        ezStringBuilder checkedPath;
+        const ezStatus pathStatus = GetRuntimeSession().ResolveOutputPath(absolutePath, checkedPath);
+        if (pathStatus.Failed())
+        {
+          ReportStartupFailure(pathStatus.GetMessageString().GetView());
+          return;
+        }
+      }
+      ezApplicationFileSystemConfig::Clear();
+      for (const auto& config : appFileSystemConfig.m_DataDirs)
+      {
+        const auto usage = config.m_bWritable && !config.m_sRootName.IsEmpty() ? ezDataDirUsage::AllowWrites : ezDataDirUsage::ReadOnly;
+        if (ezFileSystem::AddDataDirectory(config.m_sDataDirSpecialPath, "AppFileSystemConfig", config.m_sRootName, usage).Failed())
+        {
+          ReportStartupFailure(ezFmt("Cannot mount runtime resource directory '{}'.", config.m_sDataDirSpecialPath));
+          return;
+        }
+      }
+    }
+    else
+    {
+      appFileSystemConfig.Apply();
+    }
   }
 
   {
@@ -222,8 +301,31 @@ void ezGameApplicationBase::Init_FileSystem_ConfigureDataDirs()
     ezStringBuilder sLogFile;
     sLogFile.SetFormat(":appdata/Log.htm");
     m_LogHTML.BeginLog(sLogFile, GetApplicationName());
+    if (GetRuntimeSession().IsSelected() && !m_LogHTML.GetOpenedLogFile().IsOpen())
+    {
+      ReportStartupFailure("Cannot open the private runtime HTML log.");
+      return;
+    }
 
     m_LogToHTML = ezGlobalLog::AddLogWriter(ezMakeDelegate(&ezLogWriter::HTML::LogMessageHandler, &m_LogHTML));
+  }
+}
+
+void ezGameApplicationBase::Init_FileSystem_ConfigureSessionDataDirs()
+{
+  if (ezFileSystem::AddDataDirectory("", "GameApplicationBase", ":", ezDataDirUsage::ReadOnly).Failed())
+  {
+    ReportStartupFailure("Cannot mount absolute read-only runtime resources.");
+    return;
+  }
+  for (const char* szRoot : {"bin", "shadercache", "appdata"})
+  {
+    const ezStringBuilder path(GetRuntimeSession().GetRoot(), "/", szRoot);
+    if (ezFileSystem::AddDataDirectory(path, "GameApplicationBase", szRoot, ezDataDirUsage::AllowWrites).Failed())
+    {
+      ReportStartupFailure(ezFmt("Cannot mount private runtime directory '{}'.", szRoot));
+      return;
+    }
   }
 }
 
@@ -237,6 +339,26 @@ void ezGameApplicationBase::Init_LoadWorldModuleConfig()
 void ezGameApplicationBase::Init_LoadProjectPlugins()
 {
   ezApplicationPluginConfig appPluginConfig;
+  if (GetRuntimeSession().IsSelected())
+  {
+    if (appPluginConfig.LoadChecked().Failed())
+    {
+      ReportStartupFailure("Cannot load runtime plugin configuration.");
+      return;
+    }
+    for (const auto& plugin : appPluginConfig.m_Plugins)
+    {
+      // Consuming prepared output forbids hot reload. Dependencies use the default original load too.
+      if (ezPlugin::LoadPlugin(plugin.m_sAppDirRelativePath).Failed())
+      {
+        ReportStartupFailure(ezFmt("Cannot load required runtime plugin '{}'.", plugin.m_sAppDirRelativePath));
+        return;
+      }
+      if (ShouldApplicationQuit())
+        return;
+    }
+    return;
+  }
   appPluginConfig.Load();
   appPluginConfig.Apply();
 }
@@ -246,7 +368,9 @@ void ezGameApplicationBase::Init_PlatformProfile_LoadForRuntime()
   const ezStringBuilder sRuntimeProfileFile(":project/RuntimeConfigs/", m_PlatformProfile.GetConfigName(), ".ezProfile");
   m_PlatformProfile.AddMissingConfigs();
 
-  m_PlatformProfile.LoadForRuntime(sRuntimeProfileFile).IgnoreResult();
+  const ezResult loadedProfile = m_PlatformProfile.LoadForRuntime(sRuntimeProfileFile);
+  if (GetRuntimeSession().IsSelected() && loadedProfile.Failed())
+    ReportStartupFailure("Cannot load the runtime platform profile.");
 }
 
 void ezGameApplicationBase::Init_ConfigureTags()

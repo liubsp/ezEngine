@@ -1,6 +1,7 @@
 #include <FileservePlugin/FileservePluginPCH.h>
 
 #include <FileservePlugin/Client/FileserveDataDir.h>
+#include <Foundation/Application/Application.h>
 
 // clang-format off
 EZ_BEGIN_SUBSYSTEM_DECLARATION(FileservePlugin, FileservePluginMain)
@@ -11,6 +12,18 @@ EZ_BEGIN_SUBSYSTEM_DECLARATION(FileservePlugin, FileservePluginMain)
 
   ON_CORESYSTEMS_STARTUP
   {
+    // Fileserve owns OS-level shared caches and cannot participate in an isolated runtime.
+    // Check before registering its mount factory or constructing the client, including dependency loads.
+    if (ezStartup::HasApplicationTag("runtime-session"))
+    {
+      ezLog::Error("Fileserve is not supported in a runtime session.");
+      if (auto* pApp = ezApplication::GetApplicationInstance())
+      {
+        pApp->SetReturnCode(1);
+        pApp->QuitApplication();
+      }
+      return;
+    }
     ezFileSystem::RegisterDataDirectoryFactory(ezDataDirectory::FileserveType::Factory, 100.0f);
 
     if (ezStartup::HasApplicationTag("tool") ||

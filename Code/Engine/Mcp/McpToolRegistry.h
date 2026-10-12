@@ -33,7 +33,8 @@ public:
   /// each host derives the concrete type that is actually instantiated here.
   static void UpdateProviders();
 
-  /// \brief Destroys all providers. Called when the plugin is unloaded.
+  /// Destroys all providers. Hosts must first stop serving, then clear before unloading any plugin
+  /// that supplied a provider. Clearing again is harmless; retaining provider vtables past DLL unload is not.
   static void Clear();
 
   /// \brief All tools of all providers, in registration order.

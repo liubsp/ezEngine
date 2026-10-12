@@ -71,7 +71,12 @@ ezResult ezMcpSocket::Listen(ezUInt16 uiPort)
   // the second one failing to bind, which is what the per-editor port exists to make happen.
   // SO_EXCLUSIVEADDRUSE is the opposite request: refuse to share, and refuse to be taken over.
   const BOOL bExclusive = TRUE;
-  setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&bExclusive), sizeof(bExclusive));
+  if (setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&bExclusive), sizeof(bExclusive)) == SOCKET_ERROR)
+  {
+    ezLog::Error("MCP: Could not request exclusive port ownership: {}", WSAGetLastError());
+    closesocket(sock);
+    return EZ_FAILURE;
+  }
 
   sockaddr_in addr = {};
   addr.sin_family = AF_INET;
@@ -102,7 +107,9 @@ ezResult ezMcpSocket::Listen(ezUInt16 uiPort)
   }
   else
   {
-    m_uiPort = uiPort;
+    ezLog::Error("MCP: Could not determine the bound port: {}", WSAGetLastError());
+    closesocket(sock);
+    return EZ_FAILURE;
   }
 
   m_iSocket = static_cast<ezInt64>(sock);

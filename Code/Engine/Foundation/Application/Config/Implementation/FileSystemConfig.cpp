@@ -60,6 +60,11 @@ ezResult ezApplicationFileSystemConfig::Save(ezStringView sPath)
 
 void ezApplicationFileSystemConfig::Load(ezStringView sPath)
 {
+  LoadChecked(sPath).IgnoreResult();
+}
+
+ezResult ezApplicationFileSystemConfig::LoadChecked(ezStringView sPath)
+{
   EZ_LOG_BLOCK("ezApplicationFileSystemConfig::Load()");
 
   m_DataDirs.Clear();
@@ -68,14 +73,14 @@ void ezApplicationFileSystemConfig::Load(ezStringView sPath)
   if (file.Open(sPath).Failed())
   {
     ezLog::Dev("File-system config file '{0}' does not exist.", sPath);
-    return;
+    return EZ_FAILURE;
   }
 
   ezOpenDdlReader reader;
   if (reader.ParseDocument(file, 0, ezLog::GetThreadLocalLogSystem()).Failed())
   {
     ezLog::Error("Failed to parse file-system config file '{0}'", sPath);
-    return;
+    return EZ_FAILURE;
   }
 
   const ezOpenDdlReaderElement* pTree = reader.GetRootElement();
@@ -117,7 +122,7 @@ void ezApplicationFileSystemConfig::Load(ezStringView sPath)
         temp.AppendPath(cfg.m_sDataDirSpecialPath.GetData() + 5);
         cfg.m_sDataDirSpecialPath = temp;
       }
-      else if (!cfg.m_sDataDirSpecialPath.StartsWith_NoCase(">sdk/"))
+      else if (!cfg.m_sDataDirSpecialPath.StartsWith(">") && !cfg.m_sDataDirSpecialPath.IsAbsolutePath())
       {
         ezStringBuilder temp(">sdk/");
         temp.AppendPath(cfg.m_sDataDirSpecialPath);
@@ -127,6 +132,7 @@ void ezApplicationFileSystemConfig::Load(ezStringView sPath)
 
     m_DataDirs.PushBack(cfg);
   }
+  return EZ_SUCCESS;
 }
 
 void ezApplicationFileSystemConfig::Apply()

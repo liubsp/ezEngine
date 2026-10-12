@@ -79,9 +79,32 @@ void ezGameApplication::SetOverrideDefaultDeviceCreator(ezDelegate<ezGALDevice*(
 
 ezResult ezGameApplication::BeforeCoreSystemsStartup()
 {
+  const auto& commandLine = *ezCommandLineUtils::GetGlobalInstance();
+  ezStringView sSession;
+  ezStatus startupStatus = ezRuntimeStartup::GetSingleOption(commandLine, "-runtimeSession", sSession);
+  if (startupStatus.Succeeded())
+    startupStatus = ConfigureRuntimeStartup();
+  if (startupStatus.Failed())
+  {
+    ReportStartupFailure(startupStatus.GetMessageString().GetView());
+    return EZ_FAILURE;
+  }
+  if (commandLine.HasOption("-runtimeSession"))
+  {
+    if (ConfigureRuntimeSession(sSession).Failed())
+      return EZ_FAILURE;
+  }
+  if (ShouldApplicationQuit())
+    return EZ_FAILURE;
+
 #if EZ_ENABLED(EZ_COMPILE_FOR_DEVELOPMENT)
   // before anything else may log, so that '-logfile' contains the entire startup
   Unattended_Setup();
+  if (ShouldApplicationQuit())
+  {
+    Unattended_DetachLog();
+    return EZ_FAILURE;
+  }
 #endif
 
   return SUPER::BeforeCoreSystemsStartup();
@@ -165,7 +188,9 @@ Only useful together with -fixedtimestep.",
 
 void ezGameApplication::Unattended_Setup()
 {
-  const ezStringBuilder sLogFile = opt_LogFile.GetOptionValue(ezCommandLineOption::LogMode::AlwaysIfSpecified);
+  ezStringBuilder sLogFile = opt_LogFile.GetOptionValue(ezCommandLineOption::LogMode::AlwaysIfSpecified);
+  if (GetRuntimeSession().IsSelected() && sLogFile.IsEmpty())
+    sLogFile.Set(GetRuntimeSession().GetRoot(), "/logs/runtime.log");
 
   if (!sLogFile.IsEmpty())
   {
@@ -177,6 +202,11 @@ void ezGameApplication::Unattended_Setup()
     }
     else
     {
+      if (GetRuntimeSession().IsSelected())
+      {
+        ReportStartupFailure("Could not open the private runtime text log.");
+        return;
+      }
       ezLog::Error("Could not open log file '{}' for writing.", sLogFile);
     }
   }

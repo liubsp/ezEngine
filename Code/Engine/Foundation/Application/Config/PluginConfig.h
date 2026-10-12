@@ -14,6 +14,10 @@ public:
 
   ezResult Save(ezStringView sConfigPath = s_sConfigFile) const;
   void Load(ezStringView sConfigPath = s_sConfigFile);
+
+  /// Like Load, but reports missing or malformed configuration to startup owners that cannot continue.
+  ezResult LoadChecked(ezStringView sConfigPath = s_sConfigFile);
+
   void Apply();
 
   struct EZ_FOUNDATION_DLL PluginConfig

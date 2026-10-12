@@ -2,6 +2,7 @@
 
 #include <Core/Configuration/PlatformProfile.h>
 #include <Core/Console/ConsoleFunction.h>
+#include <Core/GameApplication/RuntimeSession.h>
 #include <Core/GameApplication/WindowOutputTargetBase.h>
 #include <Core/GameState/GameStateBase.h>
 #include <Core/System/Window.h>
@@ -76,7 +77,39 @@ public:
   /// \brief Returns the ezGameApplicationBase singleton
   static ezGameApplicationBase* GetGameApplicationBaseInstance() { return s_pGameApplicationBaseInstance; }
 
+  /// Select before BeforeCoreSystemsStartup, including in programmatic fixtures. Selection and its
+  /// exclusive handle survive all shutdown hooks and derived-member destruction. Failure is fatal
+  /// to startup; callers must not continue with normal storage after rejection.
+  ezStatus ConfigureRuntimeSession(ezStringView sRoot);
+
+  const ezRuntimeSession& GetRuntimeSession() const { return m_RuntimeSession; }
+
+  /// Startup-thread failure boundary for plugins and void initialization hooks. Stops later stages,
+  /// sets a nonzero exit code and writes to inherited stderr as well as the configured engine log.
+  void ReportStartupFailure(const ezFormatString& message);
+
+  /// MCP host reports the actual bound port once, before game-state activation. Zero is never a
+  /// bound port. Readers on update threads may use this immutable value until serving ends.
+  ezStatus ReportBoundControlPort(ezUInt16 uiPort);
+
+  ezUInt16 GetBoundControlPort() const { return m_uiBoundControlPort; }
+
+  /// Only the owning transport calls this, after joining serving and application update threads.
+  void ClearBoundControlPort();
+
+  bool IsControlRequired() const { return m_RuntimeControlOptions.m_bRequired; }
+
+private:
+  ezRuntimeSession m_RuntimeSession;
+  ezRuntimeControlOptions m_RuntimeControlOptions;
+  ezUInt16 m_uiBoundControlPort = 0;
+  bool m_bStartupStarted = false;
+
 protected:
+  /// Called by ezGameApplication before its pre-base text logger; the base also calls it for other
+  /// hosts. It parses control intent without requiring the transport DLL to exist.
+  ezStatus ConfigureRuntimeStartup();
+
   static ezGameApplicationBase* s_pGameApplicationBaseInstance;
 
   ///@}
@@ -232,6 +265,7 @@ protected:
   virtual void Init_LoadRequiredPlugins();
   virtual void Init_ConfigureAssetManagement();
   virtual void Init_FileSystem_ConfigureDataDirs();
+  void Init_FileSystem_ConfigureSessionDataDirs();
   virtual void Init_LoadWorldModuleConfig();
   virtual void Init_LoadProjectPlugins();
   virtual void Init_PlatformProfile_LoadForRuntime();

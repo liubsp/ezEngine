@@ -93,6 +93,10 @@ public:
   /// and ignoring the other data dirs.
   static ezResult AddDataDirectory(ezStringView sDataDirectory, ezStringView sGroup = {}, ezStringView sRootName = {}, ezDataDirUsage usage = ezDataDirUsage::ReadOnly); // [tested]
 
+  /// Normalizes a mount root exactly as AddDataDirectory does: removes leading colons and trailing
+  /// slashes, then uppercases it. A root consisting only of these delimiters becomes empty.
+  static void CleanUpRootName(ezStringBuilder& inout_sRoot);
+
   /// \brief Searches for a data directory with the given root name and removes it
   ///
   /// Returns true, if one was found and removed, false if no such data dir existed.
@@ -310,8 +314,6 @@ private:
   static ezStringView GetDataDirRelativePath(ezStringView sFile, ezUInt32 uiDataDir);
 
   static ezDataDirectoryInfo* GetDataDirForRoot(const ezString& sRoot);
-
-  static void CleanUpRootName(ezStringBuilder& sRoot);
 
   static ezString s_sSdkRootDir;
   static ezMap<ezString, ezString> s_SpecialDirectories;

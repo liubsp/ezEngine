@@ -26,7 +26,7 @@ struct ModuleData
   ezHybridArray<ezString, 2> m_sPluginDependencies;
   ezBitflags<ezPluginLoadFlags> m_LoadFlags;
 
-  void Initialize();
+  ezResult Initialize();
   void Uninitialize();
 };
 
@@ -51,7 +51,7 @@ void ezPlugin::InitializeStaticallyLinkedPlugins()
     // We need to trigger the ezPlugin events to make sure the sub-systems are initialized at least once.
     ezPlugin::BeginPluginChanges();
     EZ_SCOPE_EXIT(ezPlugin::EndPluginChanges());
-    g_StaticModule.Initialize();
+    g_StaticModule.Initialize().IgnoreResult();
 
 #if EZ_DISABLED(EZ_COMPILE_ENGINE_AS_DLL)
     EZ_LOG_BLOCK("Initialize Statically Linked Plugins");
@@ -80,23 +80,33 @@ void ezPlugin::GetAllPluginInfos(ezDynamicArray<PluginInfo>& ref_infos)
   }
 }
 
-void ModuleData::Initialize()
+ezResult ModuleData::Initialize()
 {
   if (m_bCalledOnLoad)
-    return;
+    return EZ_SUCCESS;
 
+  // Static-plugin dependencies re-enter InitializeStaticallyLinkedPlugins through LoadPlugin.
   m_bCalledOnLoad = true;
-
   for (const auto& dep : m_sPluginDependencies)
   {
-    // TODO: ignore ??
+#if EZ_ENABLED(EZ_COMPILE_ENGINE_AS_DLL)
+    if (ezPlugin::LoadPlugin(dep).Failed())
+    {
+      m_bCalledOnLoad = false;
+      return EZ_FAILURE;
+    }
+#else
+    // Statically linked dependencies are already present; their enumeration entries are installed
+    // after static initialization, so LoadPlugin cannot yet establish their names here.
     ezPlugin::LoadPlugin(dep).IgnoreResult();
+#endif
   }
 
   for (auto cb : m_OnLoadCB)
   {
     cb();
   }
+  return EZ_SUCCESS;
 }
 
 void ModuleData::Uninitialize()
@@ -182,7 +192,7 @@ static ezResult UnloadPluginInternal(ezStringView sPluginFile)
   }
 
   // delete the plugin copy that we had loaded
-  if (ezPlugin::PlatformNeedsPluginCopy())
+  if (ezPlugin::PlatformNeedsPluginCopy() && thisMod.Value().m_LoadFlags.IsSet(ezPluginLoadFlags::LoadCopy))
   {
     ezStringBuilder sOriginalFile, sCopiedFile;
     ezPlugin::GetPluginPaths(sPluginFile, sOriginalFile, sCopiedFile, g_LoadedModules[sPluginFile].m_uiFileNumber);
@@ -279,7 +289,13 @@ success:
       s_PluginEvents.Broadcast(e);
     }
 
-    thisMod.Initialize();
+    if (thisMod.Initialize().Failed())
+    {
+      // Registries already observed AfterLoadingBeforeInit. Use the normal unload notifications
+      // to discard their entries too. No ON_LOADED callbacks ran, so Uninitialize is a no-op.
+      UnloadPluginInternal(sPluginFile).IgnoreResult();
+      return EZ_FAILURE;
+    }
 
     // Broadcast Event: After loading plugin
     {
@@ -311,8 +327,13 @@ ezResult ezPlugin::LoadPlugin(ezStringView sPluginFile, ezBitflags<ezPluginLoadF
   // make sure this is done first
   InitializeStaticallyLinkedPlugins();
 
-  if (g_LoadedModules.Find(sPluginFile).IsValid())
+  if (auto module = g_LoadedModules.Find(sPluginFile); module.IsValid())
   {
+#if EZ_ENABLED(EZ_COMPILE_ENGINE_AS_DLL)
+    // A failed OS unload may have retained a module whose dependencies did not initialize.
+    if (!module.Value().m_bCalledOnLoad)
+      return EZ_FAILURE;
+#endif
     ezLog::Debug("Plugin '{0}' already loaded.", sPluginFile);
     return EZ_SUCCESS;
   }
@@ -332,7 +353,9 @@ ezResult ezPlugin::LoadPlugin(ezStringView sPluginFile, ezBitflags<ezPluginLoadF
 
   ezLog::Debug("Plugin to load: \"{0}\"", sPluginFile);
 
-  // make sure to use a static string pointer from now on, that stays where it is
+  // Event consumers retain the map-owned name until unload (e.g. subsystem ownership).
+  // Rollback can remove that entry, so keep a separate name for failure bookkeeping only.
+  const ezString sStablePluginFile(sPluginFile);
   sPluginFile = g_LoadedModules.FindOrAdd(sPluginFile).Key();
 
   ezResult res = LoadPluginInternal(sPluginFile, flags);
@@ -343,8 +366,17 @@ ezResult ezPlugin::LoadPlugin(ezStringView sPluginFile, ezBitflags<ezPluginLoadF
   }
   else
   {
-    // If we failed to load the plugin, it shouldn't be in the loaded modules list
-    g_LoadedModules.Remove(sPluginFile);
+    sPluginFile = sStablePluginFile;
+    auto module = g_LoadedModules.Find(sPluginFile);
+    if (module.IsValid() && module.Value().m_hModule != 0)
+    {
+      // The OS refused rollback. Keep ownership so shutdown can retry, but never report it loaded.
+      s_PluginLoadOrder.PushBack(sPluginFile);
+    }
+    else
+    {
+      g_LoadedModules.Remove(sPluginFile);
+    }
   }
 
   return res;

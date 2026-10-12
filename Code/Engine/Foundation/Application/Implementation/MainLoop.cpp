@@ -2,6 +2,7 @@
 
 #include <Foundation/Application/Application.h>
 #include <Foundation/Configuration/Startup.h>
+#include <Foundation/Utilities/CommandLineUtils.h>
 
 #if defined(LIVEPP_ENABLED)
 #  include <LPP_API_x64_CPP.h>
@@ -12,6 +13,14 @@ inline lpp::LppDefaultAgent lppAgent;
 ezResult ezRun_Startup(ezApplication* pApplicationInstance)
 {
 #if EZ_ENABLED(EZ_COMPILE_FOR_DEVELOPMENT) && defined(LIVEPP_ENABLED)
+  // Live++ starts before the application's storage-selection hook and owns external mutable state.
+  // Reject this unsupported combination before constructing its agent, including programmatic selection.
+  if (ezCommandLineUtils::GetGlobalInstance()->HasOption("-runtimeSession") || ezStartup::HasApplicationTag("runtime-session"))
+  {
+    fprintf(stderr, "Runtime sessions are not supported in a Live++ enabled application.\n");
+    pApplicationInstance->SetReturnCode(1);
+    return EZ_FAILURE;
+  }
   // create a synchronized agent, loading the Live++ agent from the given path, e.g. "ThirdParty/LivePP"
   lppAgent = lpp::LppCreateDefaultAgent(nullptr, L"LivePP");
   // bail out in case the agent is not valid

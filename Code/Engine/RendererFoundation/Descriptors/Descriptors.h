@@ -5,6 +5,7 @@
 #include <Foundation/Containers/HybridArray.h>
 #include <Foundation/Containers/StaticArray.h>
 #include <Foundation/Math/Color.h>
+#include <Foundation/Strings/String.h>
 #include <Foundation/Types/SharedPtr.h>
 #include <RendererFoundation/Descriptors/Enumerations.h>
 #include <RendererFoundation/RendererFoundationDLL.h>
@@ -87,6 +88,10 @@ struct ezGALSwapChainCreationDescription : public ezHashableStruct<ezGALSwapChai
 struct ezGALDeviceCreationDescription
 {
   bool m_bDebugDevice = false;
+
+  /// Optional absolute directory for engine-owned pipeline cache reads and writes. Empty retains the
+  /// renderer's normal application-user-data location. Does not redirect driver-managed caches.
+  ezString m_sPipelineCacheDirectory;
 };
 
 struct ezGALShaderCreationDescription : public ezHashableStruct<ezGALShaderCreationDescription>

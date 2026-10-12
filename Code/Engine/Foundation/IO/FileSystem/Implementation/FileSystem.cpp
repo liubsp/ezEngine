@@ -62,20 +62,20 @@ void ezFileSystem::UnregisterEventHandler(ezEventSubscriptionID subscriptionId)
   s_pData->m_Event.RemoveEventHandler(subscriptionId);
 }
 
-void ezFileSystem::CleanUpRootName(ezStringBuilder& sRoot)
+void ezFileSystem::CleanUpRootName(ezStringBuilder& inout_sRoot)
 {
   // this cleaning might actually make the root name empty
   // e.g. ":" becomes ""
   // which is intended to support passing through of absolute paths
   // ie. mounting the empty dir "" under the root ":" will allow to write directly to files using absolute paths
 
-  while (sRoot.StartsWith(":"))
-    sRoot.Shrink(1, 0);
+  while (inout_sRoot.StartsWith(":"))
+    inout_sRoot.Shrink(1, 0);
 
-  while (sRoot.EndsWith("/"))
-    sRoot.Shrink(0, 1);
+  while (inout_sRoot.EndsWith("/"))
+    inout_sRoot.Shrink(0, 1);
 
-  sRoot.ToUpper();
+  inout_sRoot.ToUpper();
 }
 
 ezResult ezFileSystem::AddDataDirectory(ezStringView sDataDirectory, ezStringView sGroup, ezStringView sRootName, ezDataDirUsage usage)
