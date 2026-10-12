@@ -82,7 +82,7 @@ public:
 
   /// Set if the application runs without a user present, e.g. driven by a script or an AI agent.
   ///
-  /// The UI is still shown, but everything that would block waiting for input must not be displayed. The
+  /// This does not choose desktop presentation. Anything that would block waiting for input must not be displayed. The
   /// message box functions below therefore only log their message and return their unattended answer, and
   /// ezQtDialog::exec() returns without showing anything. Code that opens a modal window in some other way
   /// (QFileDialog, QInputDialog, ...) has to check this itself, otherwise it stalls the application

@@ -182,11 +182,10 @@ void ezReflectionPool::Data::OnReflectionProbeMappingEvent(const ezUInt32 uiWorl
         m_DynamicUpdateQueue.RemoveAndCopy(probeUpdate);
       }
 
-      if (m_ActiveDynamicUpdate.Contains(probeUpdate))
-      {
-        m_ActiveDynamicUpdate.Remove(probeUpdate);
-        m_ReflectionProbeUpdater.CancelUpdate(probeUpdate);
-      }
+      m_ActiveDynamicUpdate.Remove(probeUpdate);
+      // A probe can occupy multiple updater slots. Completing one removes its active-set entry
+      // while another may still be in use, so unmapping must cancel all slots unconditionally.
+      m_ReflectionProbeUpdater.CancelUpdate(probeUpdate);
     }
     break;
     case ezReflectionProbeMappingEvent::Type::ProbeUpdateRequested:

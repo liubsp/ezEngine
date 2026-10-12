@@ -1,5 +1,6 @@
 #pragma once
 
+#include <EditorPluginMcp/EditorPluginMcpDLL.h>
 #include <Mcp/Tools/McpAppTool.h>
 
 #include <Foundation/Containers/DynamicArray.h>
@@ -10,9 +11,13 @@
 /// Everything generic - the process id, the executable, the command line, the bound port - is in
 /// ezMcpAppTool. What is left here is what only the editor has: documents that can be unsaved, a log
 /// file whose name is derived from '-appid', and a separate engine process to point at.
-class ezMcpEditorAppTool : public ezMcpAppTool
+class EZ_EDITORPLUGINMCP_DLL ezMcpEditorAppTool : public ezMcpAppTool
 {
   EZ_ADD_DYNAMIC_REFLECTION(ezMcpEditorAppTool, ezMcpAppTool);
+
+public:
+  virtual void GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_tools) const override;
+  virtual void Execute(ezStringView sToolName, const ezVariantDictionary& arguments, ezMcpToolResult& out_result) override;
 
 protected:
   virtual ezStringView GetHostNoun() const override { return "editor"; }
@@ -30,6 +35,9 @@ protected:
   virtual void RequestQuit(bool bDiscardChanges) override;
 
 private:
+  // Provider recreation invalidates targeting tokens held by earlier launch records.
+  const ezUuid m_QuitInstance = ezUuid::MakeUuid();
+
   /// \brief Appends the names of all open documents with unsaved changes.
   static void CollectModifiedDocuments(ezDynamicArray<ezString>& out_documents);
 

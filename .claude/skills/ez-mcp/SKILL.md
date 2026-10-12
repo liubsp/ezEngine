@@ -19,7 +19,7 @@ one, then talk to it. For anything the file system already answers, read the fil
 
 ```shell
 # editor
-ezEditor.exe -project "Data/Samples/PacMan" -unattended -editor-mcpport 7399
+ezEditor.exe -project "Data/Samples/PacMan" -minimized -NoSplash -unattended -editor-mcpport 7399
 # game, standalone - no editor needed
 ezPlayer.exe -project <project-folder> -scene <path/to/Scene.ezBinScene> -profile Default -mcpport 7401
 ```
@@ -29,6 +29,14 @@ Binaries are in `Workspace/<workspace>-output/Bin/WinVs2026Dev64/`.
 - **`-unattended` is required for the editor.** Otherwise a modal dialog during startup (e.g. "compile
   the C++ plugin?") hangs it before it serves anything. Tool calls suppress dialogs themselves; startup
   does not.
+- `-minimized` starts the main window minimized; omit it for ordinary visible startup. Use `-NoSplash`
+  to omit the splash. This does not hide dialogs/floating panels, prevent activation during later
+  interaction, suppress document safety questions or isolate preferences. Normal editor state is used.
+- For recorded-editor stop, retain `app_info.editorQuitInstance` from the identity-verified editor and
+  call `app_quit_if_instance` with only `expectedInstance`. It never discards unsaved changes and
+  rejects a replacement provider's token. A positive reply requests shutdown, not proof of exit.
+  Missing capability, refusal or a lost reply requires human close/recovery, never fallback to
+  unguarded `app_quit` or process termination. Direct MCP callers still have ordinary `app_quit`.
 - Launch detached (`start ""` / `Start-Process`); it runs until told to quit.
 - Startup takes seconds - **poll the port**, do not sleep a fixed time.
 - Pick an unused port per editor. Without `-editor-mcpport`, the editor starts **no** MCP server.

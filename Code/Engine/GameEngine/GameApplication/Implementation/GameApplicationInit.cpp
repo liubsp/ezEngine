@@ -275,6 +275,13 @@ void ezGameApplication::Init_SetupGraphicsDevice()
       ReportStartupFailure("The graphics device creator returned no device.");
       return;
     }
+    if (!ezGALDeviceFactory::IsRendererAllowed(pDevice->GetRenderer()))
+    {
+      ReportStartupFailure(ezFmt("This build requires renderer '{}'; the device creator returned '{}'.",
+        ezGALDeviceFactory::GetRequiredRenderer(), pDevice->GetRenderer()));
+      EZ_DEFAULT_DELETE(pDevice);
+      return;
+    }
     if (pDevice->Init().Failed())
     {
       EZ_DEFAULT_DELETE(pDevice);
@@ -333,9 +340,9 @@ void ezGameApplication::Init_LoadRequiredPlugins()
 
   if (ezPlugin::LoadPlugin(szShaderCompiler, ezPluginLoadFlags::PluginIsOptional).Failed())
   {
-    if (GetRuntimeSession().IsSelected())
+    if (GetRuntimeSession().IsSelected() || !ezGALDeviceFactory::GetRequiredRenderer().IsEmpty())
     {
-      ReportStartupFailure(ezFmt("Cannot load shader compiler '{}' for the private runtime cache.", szShaderCompiler));
+      ReportStartupFailure(ezFmt("Cannot load required shader compiler '{}'.", szShaderCompiler));
       return;
     }
     ezLog::Warning("Shader compiler plugin '{}' not found", szShaderCompiler);

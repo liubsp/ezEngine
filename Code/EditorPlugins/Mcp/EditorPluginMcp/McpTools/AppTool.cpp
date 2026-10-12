@@ -7,6 +7,7 @@
 
 #include <Foundation/IO/FileSystem/FileSystem.h>
 #include <Foundation/Utilities/CommandLineUtils.h>
+#include <Foundation/Utilities/ConversionUtils.h>
 
 #include <EditorFramework/EditorApp/EditorApp.moc.h>
 #include <EditorFramework/IPC/EngineProcessConnection.h>
@@ -21,6 +22,46 @@ EZ_BEGIN_DYNAMIC_REFLECTED_TYPE(ezMcpEditorAppTool, 1, ezRTTIDefaultAllocator<ez
 EZ_END_DYNAMIC_REFLECTED_TYPE;
 // clang-format on
 
+void ezMcpEditorAppTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_tools) const
+{
+  ezMcpAppTool::GetSupportedTools(out_tools);
+  auto& desc = out_tools.ExpandAndGetRef();
+  desc.m_sName = "app_quit_if_instance";
+  desc.m_sDescription = "Requests document-safe quit only if expectedInstance matches this provider's app_info.editorQuitInstance. "
+                        "Never discards changes. A positive reply requests shutdown; it does not prove exit. "
+                        "On refusal or an unknown/lost reply, use human close/recovery, not unguarded quit or process termination.";
+  desc.m_sInputSchema = R"({"type":"object","properties":{"expectedInstance":{"type":"string","description":"UUID from this editor's validated app_info response."}},"required":["expectedInstance"],"additionalProperties":false})";
+}
+
+void ezMcpEditorAppTool::Execute(ezStringView sToolName, const ezVariantDictionary& arguments, ezMcpToolResult& out_result)
+{
+  if (sToolName != "app_quit_if_instance")
+  {
+    ezMcpAppTool::Execute(sToolName, arguments, out_result);
+    return;
+  }
+
+  const auto instance = arguments.Find("expectedInstance");
+  if (arguments.GetCount() != 1 || !instance.IsValid() || !instance.Value().IsA<ezString>())
+  {
+    out_result.SetError("app_quit_if_instance requires only a UUID-string expectedInstance argument.");
+    return;
+  }
+
+  // Compare with the canonical UUID we publish. This also rejects malformed/empty input without
+  // passing untrusted hexadecimal digits to the engine's permissive UUID conversion routine.
+  ezStringBuilder sInstance;
+  ezConversionUtils::ToString(m_QuitInstance, sInstance);
+  if (!instance.Value().Get<ezString>().IsEqual_NoCase(sInstance))
+  {
+    out_result.SetError("expectedInstance is invalid or does not match this editor; shutdown was not requested.");
+    return;
+  }
+
+  // Reuse the ordinary refusal/reporting/deferred-shutdown path, always without discard.
+  ezMcpAppTool::Execute("app_quit", {}, out_result);
+}
+
 ezStringView ezMcpEditorAppTool::GetBuildTimestamp() const
 {
   return __DATE__ " " __TIME__;
@@ -29,7 +70,7 @@ ezStringView ezMcpEditorAppTool::GetBuildTimestamp() const
 ezStringView ezMcpEditorAppTool::GetRelaunchHint() const
 {
   return "To start an editor again afterwards, run the ezEditor executable with "
-         "'-project <path-to-project-folder> -unattended -editor-mcpport <port>'. Pass '-unattended', or the editor may "
+         "'-project <path-to-project-folder> -minimized -NoSplash -unattended -editor-mcpport <port>'. Pass '-unattended', or the editor may "
          "open a dialog while opening the project - before any tool call can suppress it - and hang there. "
          "It serves MCP at http://127.0.0.1:<port>/mcp "
          "once the project is open, which takes a few seconds - poll the port rather than assuming a delay. "
@@ -39,6 +80,10 @@ ezStringView ezMcpEditorAppTool::GetRelaunchHint() const
 
 void ezMcpEditorAppTool::AddHostInfo(ezMcpJsonWriter& ref_writer)
 {
+  ezStringBuilder sInstance;
+  ezConversionUtils::ToString(m_QuitInstance, sInstance);
+  ref_writer.AddVariableString("editorQuitInstance", sInstance);
+
   // Where the editor writes its log. Reported as an absolute path because the location is otherwise
   // undiscoverable: it lives in the user data directory under a name derived from '-appid', and
   // nothing in the tool list or in '-help' points at it. It matters most when the editor dies - a
@@ -116,7 +161,8 @@ void ezMcpEditorAppTool::AddHostInfo(ezMcpJsonWriter& ref_writer)
   }
 
   ref_writer.AddVariableString("launchHint",
-    "Run 'executable' with '-project <project-folder> -editor-mcpport <port>' to start another editor. Poll the port until it "
+    "Run 'executable' with '-project <project-folder> -minimized -NoSplash -unattended -editor-mcpport <port>' to start another editor. "
+    "Minimized affects main-window startup only; dialogs and later interaction retain ordinary behavior. Poll the port until it "
     "accepts connections - startup takes a few seconds. Use a port other than 'mcpPort' to run one alongside this editor. "
     "'logFile' is written as HTML and is the only record left if the editor crashes, since that also kills this server; "
     "note that a crash may lose the last messages, as the log is not flushed on the way down.");
@@ -173,12 +219,37 @@ void ezMcpEditorAppTool::RequestQuit(bool bDiscardChanges)
   // Deferred to the next event loop iteration, because this runs inside the request handler: the
   // response has not been written to the socket yet, and quitting here would drop it, leaving the
   // caller waiting on a connection that closes with no answer.
-  QTimer::singleShot(0, qApp, []()
+  QTimer::singleShot(0, qApp, [bDiscardChanges]()
     {
+      auto* pEditor = ezQtEditorApp::GetSingleton();
+      if (pEditor == nullptr || !pEditor->IsRunning())
+      {
+        return;
+      }
+
+      // The reply is deferred; another GUI event may have modified a document in the meantime.
+      ezDynamicArray<ezString> modifiedDocuments;
+      CollectModifiedDocuments(modifiedDocuments);
+      if (!bDiscardChanges && !modifiedDocuments.IsEmpty())
+      {
+        ezLog::Warning("Editor quit refused: documents were modified after the quit request.");
+        return;
+      }
+
       // Closes the documents first, discarding unsaved changes without asking. Otherwise the shutdown
       // path finds modified documents and raises the modal save dialog that this tool exists to avoid.
       // Reaching this point means that was either unnecessary or explicitly requested.
+      ezQtScopedUnattended unattended;
+      if (!ezToolsProject::CanCloseProject() && !bDiscardChanges)
+      {
+        ezLog::Warning("Editor quit refused: project closure was declined.");
+        return;
+      }
       ezDocumentManager::CloseAllDocuments();
 
-      QApplication::closeAllWindows(); });
+      // Check the ordinary container close path rather than assuming closeAllWindows succeeded.
+      // ShutdownEditor remains the final cleanup owner after the event loop returns.
+      auto* pContainer = ezQtContainerWindow::GetContainerWindow();
+      if (pContainer != nullptr && pContainer->close())
+        QCoreApplication::quit(); });
 }

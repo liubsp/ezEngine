@@ -224,6 +224,10 @@ function(ez_set_common_target_definitions TARGET_NAME)
 		target_compile_definitions(${TARGET_NAME} PRIVATE BUILDSYSTEM_DEFAULT_RENDERER="${EZ_DEFAULT_RENDERER}")
 	endif()
 
+	if(EZ_REQUIRED_RENDERER)
+		target_compile_definitions(${TARGET_NAME} PRIVATE BUILDSYSTEM_REQUIRED_RENDERER="${EZ_REQUIRED_RENDERER}")
+	endif()
+
 	if(EZ_BUILD_EXPERIMENTAL_WEBGPU)
 		target_compile_definitions(${TARGET_NAME} PRIVATE BUILDSYSTEM_ENABLE_WEBGPU_SUPPORT)
 	endif()

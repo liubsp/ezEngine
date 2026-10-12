@@ -92,11 +92,13 @@ public:
   /// \brief Returns the ezGameApplication singleton
   static ezGameApplication* GetGameApplicationInstance() { return s_pGameApplicationInstance; }
 
-  /// \brief Returns the active renderer of the current app. Either the default or overridden via -render command line flag.
+  /// \brief Returns the requested renderer (compiled default or -renderer option), not the initialized device's renderer.
   static ezStringView GetActiveRenderer();
 
   /// \brief When the graphics device is created, by default the game application will pick a platform specific implementation. This
   /// function allows to override that by setting a custom function that creates a graphics device.
+  /// The application owns the returned, uninitialized device and deletes it with the default allocator, including on startup failure.
+  /// A null device or one that violates ezGALDeviceFactory::GetRequiredRenderer() fails startup before initialization.
   static void SetOverrideDefaultDeviceCreator(ezDelegate<ezGALDevice*(const ezGALDeviceCreationDescription&)> creator);
 
   /// \brief Implementation of ezGameApplicationBase::FindProjectDirectory to define the 'project' special data directory.

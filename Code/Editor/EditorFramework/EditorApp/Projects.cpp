@@ -254,8 +254,8 @@ ezResult ezQtEditorApp::CreateOrOpenProject(bool bCreate, ezStringView sFile0)
       }
     }
 
-    // Show the window maximized when opening a project
-    ezQtContainerWindow::GetContainerWindow()->showMaximized();
+    // Complete project/document opening with the requested main-window startup state.
+    ShowStartupWindow(m_bStartMinimized);
   }
   return EZ_SUCCESS;
 }
@@ -476,6 +476,13 @@ void ezQtEditorApp::ProjectRequestHandler(ezToolsProjectRequest& r)
 
       if (!ModifiedDocs.IsEmpty())
       {
+        if (ezQtUiServices::IsUnattended())
+        {
+          ezQtUiServices::ReportSuppressedDialog("Closing refused because documents have unsaved changes.");
+          r.m_bCanClose = false;
+          return;
+        }
+
         ezQtModifiedDocumentsDlg dlg(QApplication::activeWindow(), ModifiedDocs);
         if (dlg.exec() == 0)
           r.m_bCanClose = false;

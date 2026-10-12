@@ -131,12 +131,15 @@ public:
 
   /// \brief Can be set via the command line option '-unattended'. In this mode no user is present to interact with the editor.
   ///
-  /// The editor still shows its UI, but must not display anything modal, since nobody would ever close it and the
+  /// This does not choose desktop presentation. The editor must not display anything modal, since nobody would close it and the
   /// editor would stall forever. Message boxes going through ezQtUiServices already handle this, but anything that
   /// opens a dialog itself, or that waits for a user decision in some other way, has to check this flag.
   ///
   /// Headless mode implies this, there is no window to show a dialog on.
   bool IsInUnattendedMode() const { return m_StartupFlags.IsSet(StartupFlags::Unattended) || m_StartupFlags.IsSet(StartupFlags::Headless); }
+
+  /// Applies the main-window startup choice. Later human and MCP actions use ordinary window behavior.
+  static void ShowStartupWindow(bool bMinimized);
 
   const ezPluginBundleSet& GetPluginBundles() const { return m_PluginBundles; }
   ezPluginBundleSet& GetPluginBundles() { return m_PluginBundles; }
@@ -312,6 +315,7 @@ private:
   bool m_bIsRunning = false;
 
   ezBitflags<StartupFlags> m_StartupFlags;
+  bool m_bStartMinimized = false;
   ezDynamicArray<ezString> m_DocumentsToOpen;
 
   ezSet<ezString> m_RestartRequiredReasons;

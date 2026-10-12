@@ -248,6 +248,8 @@ EZ_END_SUBSYSTEM_DECLARATION;
 ezCommandLineOptionBool opt_Safe("_Editor", "-safe", "In safe-mode the editor minimizes the risk of crashing, for instance by not loading previous projects and scenes.", false);
 ezCommandLineOptionBool opt_Dashboard("_Editor", "-dashboard", "Starts the editor without loading the last project and its documents, so that the dashboard is shown instead.", false);
 
+static ezCommandLineOptionBool opt_Minimized("_Editor", "-minimized", "Starts the main editor window minimized. Later interaction uses ordinary window behavior.", false);
+
 /// Tells the editor that no user is present to interact with it.
 ///
 /// Questions are not answered with their *safest* option but with the one that continues as if a user had
@@ -338,6 +340,17 @@ ezResult ezQtEditorApp::CreateProjectFromCommandLine(ezStringView sTargetDirecto
   return EZ_SUCCESS;
 }
 
+void ezQtEditorApp::ShowStartupWindow(bool bMinimized)
+{
+  if (auto* pContainer = ezQtContainerWindow::GetContainerWindow())
+  {
+    if (bMinimized)
+      pContainer->showMinimized();
+    else
+      pContainer->showMaximized();
+  }
+}
+
 void ezQtEditorApp::StartupEditor()
 {
   // Has to happen before anything below can ask a question - the startup flags, which the other
@@ -380,6 +393,8 @@ void ezQtEditorApp::StartupEditor()
 void ezQtEditorApp::StartupEditor(ezBitflags<StartupFlags> startupFlags, const char* szUserDataFolder)
 {
   EZ_PROFILE_SCOPE("StartupEditor");
+
+  m_bStartMinimized = opt_Minimized.GetOptionValue(ezCommandLineOption::LogMode::AlwaysIfSpecified);
 
   QCoreApplication::setOrganizationDomain("www.ezengine.net");
   QCoreApplication::setOrganizationName("ezEngine Project");
@@ -429,7 +444,10 @@ void ezQtEditorApp::StartupEditor(ezBitflags<StartupFlags> startupFlags, const c
     SetStyleSheet();
 
     ezQtContainerWindow* pContainer = new ezQtContainerWindow();
-    pContainer->show();
+    if (m_bStartMinimized)
+      pContainer->showMinimized();
+    else
+      pContainer->show();
   }
 
   ezDocumentManager::s_Requests.AddEventHandler(ezMakeDelegate(&ezQtEditorApp::DocumentManagerRequestHandler, this));
@@ -586,7 +604,7 @@ void ezQtEditorApp::StartupEditor(ezBitflags<StartupFlags> startupFlags, const c
     // Show the window maximized when no project is being loaded
     if (ezQtContainerWindow::GetContainerWindow())
     {
-      ezQtContainerWindow::GetContainerWindow()->showMaximized();
+      ShowStartupWindow(m_bStartMinimized);
     }
   }
 
@@ -619,6 +637,12 @@ void ezQtEditorApp::StartupEditor(ezBitflags<StartupFlags> startupFlags, const c
   }
 
   ezStackTraceLogParser::Register();
+
+  // Document opening and layout restoration can change window state. Complete the initial batch
+  // minimized, then stop applying the startup choice to later project changes or interaction.
+  if (m_bStartMinimized)
+    ShowStartupWindow(true);
+  m_bStartMinimized = false;
 }
 
 void ezQtEditorApp::ShutdownEditor()

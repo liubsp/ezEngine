@@ -113,8 +113,8 @@ void ezMcpDocumentTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_too
     ezMcpToolDesc& desc = out_tools.ExpandAndGetRef();
     desc.m_sName = "document_open";
     desc.m_sDescription =
-      "Opens an existing document and returns its guid. Does nothing but return the document if it is already open, so this is also "
-      "the way to get the guid of a document by path. The type is determined by the file extension. Opening a scene can take a while, "
+      "Opens an existing document and returns its guid. An already-open document is reused; the focus option still applies. "
+      "This is also the way to get the guid by path. The type is determined by the file extension. Opening a scene can take a while, "
       "as it starts the engine process - see 'app_ping' if the call times out.";
     desc.m_sInputSchema = R"({"type":"object","properties":{)"
                           R"("path":{"type":"string","description":"Absolute path, or the path relative to the data directory parent as reported by 'asset_find'."},)"
@@ -169,8 +169,7 @@ void ezMcpDocumentTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_too
     ezMcpToolDesc& desc = out_tools.ExpandAndGetRef();
     desc.m_sName = "document_focus";
     desc.m_sDescription =
-      "Brings an open document's window to the front, so the user is looking at it. Use this to show the user what a change refers "
-      "to instead of describing where to find it. Has no effect on a document that was opened without a window.";
+      "Shows an open document to a person, requesting its window if necessary and selecting its tab.";
     desc.m_sInputSchema = R"({"type":"object","properties":{)"
                           R"("document":{"type":"string","description":"Guid or path of an open document."})"
                           R"(},"required":["document"]})";
@@ -754,6 +753,13 @@ void ezMcpDocumentTool::ExecuteFocus(const ezVariantDictionary& arguments, ezMcp
 
   if (!bHadWindow)
     pDocument->GetDocumentManager()->EnsureWindowRequested(pDocument);
+
+  auto* pWindow = ezQtDocumentWindow::FindWindowByDocument(pDocument);
+  if (pWindow == nullptr)
+  {
+    out_result.SetError("The document's window could not be created.");
+    return;
+  }
 
   pDocument->EnsureVisible();
 

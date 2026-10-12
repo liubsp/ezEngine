@@ -11,6 +11,8 @@
 #include <Foundation/IO/OSFile.h>
 #include <Foundation/System/Process.h>
 #include <Foundation/Time/Clock.h>
+#include <RendererFoundation/Device/Device.h>
+#include <RendererFoundation/Device/DeviceFactory.h>
 
 #include <Texture/Image/Formats/ImageFileFormat.h>
 #include <Texture/Image/Image.h>
@@ -119,6 +121,11 @@ void ezMcpEngineAppTool::AddHostInfo(ezMcpJsonWriter& ref_writer)
   ref_writer.AddVariableString("host", ezApplication::GetApplicationInstance()->GetApplicationName());
 
   ref_writer.AddVariableUInt64("frameCount", ezMcpEngineHost::GetFrameCount());
+
+  ref_writer.AddVariableString("requiredRenderer", ezGALDeviceFactory::GetRequiredRenderer());
+  // Game application startup publishes the default device only after successful initialization.
+  if (ezGALDevice::HasDefaultDevice())
+    ref_writer.AddVariableString("renderer", ezGALDevice::GetDefaultDevice()->GetRenderer());
 
   // Where this process writes its log. Worth reporting for the same reason as in the editor: a crash
   // takes the server with it, and the file is what is left to read afterwards.

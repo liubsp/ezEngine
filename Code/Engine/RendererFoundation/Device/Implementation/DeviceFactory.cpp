@@ -1,5 +1,6 @@
 #include <RendererFoundation/RendererFoundationPCH.h>
 
+#include <Foundation/Logging/Log.h>
 #include <RendererFoundation/Device/DeviceFactory.h>
 
 struct CreatorFuncInfo
@@ -11,8 +12,30 @@ struct CreatorFuncInfo
 
 static ezHashTable<ezString, CreatorFuncInfo> s_CreatorFuncs;
 
+ezStringView ezGALDeviceFactory::GetRequiredRenderer()
+{
+#ifdef BUILDSYSTEM_REQUIRED_RENDERER
+  return BUILDSYSTEM_REQUIRED_RENDERER;
+#else
+  return {};
+#endif
+}
+
+bool ezGALDeviceFactory::IsRendererAllowed(ezStringView sRendererName)
+{
+  const ezStringView sRequired = GetRequiredRenderer();
+  return sRequired.IsEmpty() || sRendererName == sRequired;
+}
+
 CreatorFuncInfo* GetCreatorFuncInfo(ezStringView sRendererName)
 {
+  // Check before both registry lookup and dynamic loading, including stale plugins left in output.
+  if (!ezGALDeviceFactory::IsRendererAllowed(sRendererName))
+  {
+    ezLog::Error("This build requires renderer '{}'; renderer '{}' was rejected.", ezGALDeviceFactory::GetRequiredRenderer(), sRendererName);
+    return nullptr;
+  }
+
   auto pFuncInfo = s_CreatorFuncs.GetValue(sRendererName);
   if (pFuncInfo == nullptr)
   {
@@ -42,6 +65,8 @@ ezInternal::NewInstance<ezGALDevice> ezGALDeviceFactory::CreateDevice(ezStringVi
 
 void ezGALDeviceFactory::GetShaderModelAndCompiler(ezStringView sRendererName, const char*& ref_szShaderModel, const char*& ref_szShaderCompiler)
 {
+  ref_szShaderModel = "";
+  ref_szShaderCompiler = "";
   if (auto pFuncInfo = GetCreatorFuncInfo(sRendererName))
   {
     ref_szShaderModel = pFuncInfo->m_sShaderModel;

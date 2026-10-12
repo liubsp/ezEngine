@@ -10,6 +10,7 @@ ez_create_target(APPLICATION ${PROJECT_NAME})
 ez_link_target_qt(TARGET ${PROJECT_NAME} COMPONENTS Core Gui Widgets Network)
 
 target_include_directories (${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../EditorPlugins/Scene")
+target_include_directories (${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../EditorPlugins/Mcp")
 
 target_link_libraries(${PROJECT_NAME}
   PRIVATE
@@ -17,6 +18,7 @@ target_link_libraries(${PROJECT_NAME}
   EditorFramework
   EditorEngineProcessFramework
   EditorPluginScene
+  EditorPluginMcp
   Mcp
 )
 

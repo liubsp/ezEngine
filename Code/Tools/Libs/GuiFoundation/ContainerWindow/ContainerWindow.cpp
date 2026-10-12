@@ -90,7 +90,7 @@ void ezQtContainerWindow::UpdateWindowTitle()
 
 void ezQtContainerWindow::closeEvent(QCloseEvent* e)
 {
-  if (s_bForceClose)
+  if (s_bForceClose || m_pDockManager == nullptr)
     return;
 
   s_bForceClose = true;

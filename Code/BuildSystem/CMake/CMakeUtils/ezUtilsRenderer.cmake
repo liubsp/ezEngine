@@ -25,6 +25,7 @@ endmacro()
 # #####################################
 
 set(EZ_DEFAULT_RENDERER "" CACHE STRING "The renderer to use by default when none is specified on the command line. Leave empty to auto-select (DX11 if built, else Vulkan).")
+set(EZ_REQUIRED_RENDERER "" CACHE STRING "Restrict device creation and shader compiler selection to this renderer. Empty leaves renderer selection unrestricted.")
 
 # #####################################
 # ## ez_add_renderers(<target>)
