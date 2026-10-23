@@ -183,7 +183,8 @@ public:
   /// \brief Closes the file, if it is currently opened.
   void Close(); // [tested]
 
-  /// \brief Writes the given number of bytes from the buffer into the file. Returns true if all data was successfully written.
+  /// Writes the given bytes, draining application/library buffers to the OS before returning success.
+  /// This does not guarantee stable-storage durability or detect all later device or close-time errors.
   ezResult Write(const void* pBuffer, ezUInt64 uiBytes); // [tested]
 
   /// \brief Reads up to the given number of bytes from the file. Returns the actual number of bytes that was read.

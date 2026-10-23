@@ -1,0 +1,40 @@
+name: Profile persistence (Linux)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/profile-persistence.yml'
+      - 'Utilities/Scripts/ProfilePersistence/**'
+      - 'Code/Engine/Foundation/IO/**'
+      - 'Code/Engine/Foundation/Platform/Posix/OSFile_Posix.inl'
+      - 'Code/Engine/Core/Configuration/**'
+      - 'Code/UnitTests/CoreTest/Configuration/**'
+      - 'Code/UnitTests/FoundationTest/IO/**'
+  pull_request:
+    paths:
+      - '.github/workflows/profile-persistence.yml'
+      - 'Utilities/Scripts/ProfilePersistence/**'
+      - 'Code/Engine/Foundation/IO/**'
+      - 'Code/Engine/Foundation/Platform/Posix/OSFile_Posix.inl'
+      - 'Code/Engine/Core/Configuration/**'
+      - 'Code/UnitTests/CoreTest/Configuration/**'
+      - 'Code/UnitTests/FoundationTest/IO/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile-persistence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install non-rendering build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build uuid-dev
+      - name: Build and check profile persistence
+        run: bash Utilities/Scripts/ProfilePersistence/test.sh

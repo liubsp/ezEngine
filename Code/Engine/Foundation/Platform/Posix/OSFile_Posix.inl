@@ -184,7 +184,9 @@ ezResult ezOSFile::InternalWrite(const void* pBuffer, ezUInt64 uiBytes)
     }
   }
 
-  return EZ_SUCCESS;
+  // fwrite can succeed while retaining bytes in libc. Report ordinary write errors here,
+  // rather than losing them in the unchecked fclose. This does not promise stable storage.
+  return fflush(m_FileData.m_pFileHandle) == 0 ? EZ_SUCCESS : EZ_FAILURE;
 }
 
 ezUInt64 ezOSFile::InternalRead(void* pBuffer, ezUInt64 uiBytes)

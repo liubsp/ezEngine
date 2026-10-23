@@ -69,7 +69,7 @@ Both hosts: `app_info`, `app_ping`, `app_quit`, `app_command_line_options`, `log
 
 | Editor only | |
 | --- | --- |
-| Project | `project_info`, `project_export` |
+| Project | `project_info`, `project_save_runtime_profile`, `project_export` |
 | C++ plugin | `cpp_status`, `cpp_generate`, `cpp_build` |
 | Assets | `asset_types`, `asset_find`, `asset_info`, `asset_uses`, `asset_thumbnail`, `asset_transform`, `asset_health`, `asset_history`, `asset_processor`, `asset_importers`, `asset_import` |
 | Documents | `document_types`, `document_list`, `document_open`, `document_create`, `document_save`, `document_close`, `document_focus`, `document_delete` |
@@ -112,6 +112,22 @@ moveObject  newParent <guid>    | duplicateObject | deleteObject  (each takes ev
 names, value types and enum values before writing any. Vectors and colours go in as they come out
 (`{"x":1,"y":2,"z":3}` or `[1,2,3]`). `selection_set` is worth calling even when it changes nothing - it
 is how the user sees which object is meant, and `selection_get` answers "this object".
+
+## Saving a runtime profile
+
+After editing `Editor/AssetProfiles.ddl` externally, start a fresh editor so it loads the new
+settings. Discover the loaded names with `project_info`, then call
+`project_save_runtime_profile {"profile":"Default"}`. It saves only that loaded profile to
+`RuntimeConfigs/Default.ezProfile`, returning its canonical name and project-relative path.
+It neither rereads the DDL nor changes the active profile, transforms assets or saves documents.
+Use normal asset transformation separately, then restart runtime consumers to load the new profile.
+
+Missing/unknown names, names that are not single filename components, a closed project and persistence
+failures are tool errors. An open failure leaves existing output untouched; a failed write or flush
+may leave incomplete output. Repair the cause and save again before launching a consumer, or restore
+the previous runtime file. Repeating an unchanged loaded profile save is safe, including after a
+lost response once the host has been reconciled. Use a bounded request deadline and normal safe
+editor shutdown. This is not a crash-atomic replacement or a profile-editing API.
 
 ## Driving the game
 

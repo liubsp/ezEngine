@@ -1,10 +1,14 @@
 #include <EditorTest/EditorTestPCH.h>
 
+#include <EditorFramework/Assets/AssetCurator.h>
 #include <EditorTest/TestClass/TestClass.h>
 #include <Foundation/Utilities/Progress.h>
+#include <GameEngine/Configuration/RendererProfileConfigs.h>
 #include <Mcp/McpServer.h>
 #include <Mcp/McpTool.h>
+#include <QDir>
 #include <QEventLoop>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
@@ -83,6 +87,7 @@ public:
   {
     AddSubTest("No listener without explicit port", 0);
     AddSubTest("Nested events and project close", 1);
+    AddSubTest("Save loaded runtime profile", 2);
   }
 
   ezTestAppRun RunSubTest(ezInt32 iIdentifier, ezUInt32) override
@@ -108,7 +113,10 @@ public:
       port.SetFormat("{}", iPort);
       pCommandLine->InjectCustomArgument(port);
     }
-    if (!EZ_TEST_BOOL(CreateAndLoadProject("McpDispatch").Succeeded()))
+    // The editor application's project-switch command launches another process after its first
+    // project. Reuse this disposable project's loaded plugin set in the test host instead.
+    const ezResult opened = m_sProjectPath.IsEmpty() ? CreateAndLoadProject("McpDispatch") : ezToolsProject::OpenProject(ezStringBuilder(m_sProjectPath, "/ezProject")).GetResult();
+    if (!EZ_TEST_BOOL(opened.Succeeded()))
       return ezTestAppRun::Quit;
     EZ_SCOPE_EXIT(ezToolsProject::CloseProject());
 
@@ -123,6 +131,11 @@ public:
       return ezTestAppRun::Quit;
 
     const ezUInt16 uiPort = pServer->GetPort();
+    if (iIdentifier == 2)
+    {
+      TestRuntimeProfile(uiPort);
+      return ezTestAppRun::Quit;
+    }
     s_uiCalls = 0;
     s_bReentered = false;
     const QByteArray response = Request(uiPort, "test_dispatch_nested", true);
@@ -162,12 +175,109 @@ public:
   }
 
 private:
-  QByteArray Request(ezUInt16 uiPort, const char* szTool, bool bDuringProgress = false)
+  void TestRuntimeProfile(ezUInt16 uiPort)
+  {
+    auto* pCurator = ezAssetCurator::GetSingleton();
+    const ezUInt32 uiActive = pCurator->GetActiveAssetProfileIndex();
+    auto* pProfile = pCurator->CreateAssetProfile();
+    pProfile->SetConfigName("McpSaveTest");
+    pProfile->AddMissingConfigs();
+    EZ_SCOPE_EXIT(if (pProfile != nullptr) pCurator->DeleteAssetProfile(pProfile).IgnoreResult());
+    auto* pConfig = pProfile->GetTypeConfig<ezRenderPipelineProfileConfig>();
+    if (!EZ_TEST_BOOL(pConfig != nullptr))
+      return;
+    pConfig->m_sMainRenderPipeline = "{ 0b404d2d-2438-4536-ae48-87e1b19b75d3 }";
+
+    const QString sProject = QString::fromUtf8(m_sProjectPath.GetData());
+    auto ReadFile = [](const QString& sPath)
+    {
+      QFile file(sPath);
+      return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const QString sDdl = sProject + "/Editor/AssetProfiles.ddl";
+    const QString sDefault = sProject + "/RuntimeConfigs/Default.ezProfile";
+    const QByteArray ddlBefore = ReadFile(sDdl);
+    const QByteArray defaultBefore = ReadFile(sDefault);
+    const QString sOutput = sProject + "/RuntimeConfigs/McpSaveTest.ezProfile";
+
+    auto Call = [&](const QJsonObject& arguments)
+    {
+      return QJsonDocument::fromJson(Request(uiPort, "project_save_runtime_profile", false, arguments))
+        .object()
+        .value("result")
+        .toObject();
+    };
+    for (const QJsonObject& arguments : {QJsonObject{}, QJsonObject{{"profile", 42}},
+           QJsonObject{{"profile", ""}}, QJsonObject{{"profile", "UnknownProfile"}}})
+    {
+      const auto response = Call(arguments);
+      EZ_TEST_BOOL(response.value("isError").toBool());
+    }
+    EZ_TEST_BOOL(!QFile::exists(sOutput));
+
+    for (const char* szName : {"../Escape", "sub/name", "sub\\name", ":project/Escape", ".", ".."})
+    {
+      pProfile->SetConfigName(szName);
+      EZ_TEST_BOOL(Call(QJsonObject{{"profile", szName}}).value("isError").toBool());
+    }
+    pProfile->SetConfigName("McpSaveTest");
+
+    QByteArray firstOutput;
+    for (ezUInt32 i = 0; i < 2; ++i)
+    {
+      const auto response = Call(QJsonObject{{"profile", "mcpsavetest"}});
+      EZ_TEST_BOOL(!response.isEmpty() && !response.value("isError").toBool());
+      EZ_TEST_BOOL(QJsonDocument(response).toJson().contains("RuntimeConfigs/McpSaveTest.ezProfile"));
+      const QByteArray output = ReadFile(sOutput);
+      EZ_TEST_BOOL(!output.isEmpty());
+      if (i == 0)
+        firstOutput = output;
+      else
+        EZ_TEST_BOOL(firstOutput == output);
+      ezPlatformProfile loaded;
+      loaded.AddMissingConfigs();
+      EZ_TEST_BOOL(loaded.LoadForRuntime(":project/RuntimeConfigs/McpSaveTest.ezProfile").Succeeded());
+      const auto* pLoaded = loaded.GetTypeConfig<ezRenderPipelineProfileConfig>();
+      if (EZ_TEST_BOOL(pLoaded != nullptr))
+      {
+        EZ_TEST_STRING(pLoaded->m_sMainRenderPipeline, pConfig->m_sMainRenderPipeline);
+      }
+    }
+
+    // A directory occupying the exact output path is a portable open failure; repair and retry.
+    EZ_TEST_BOOL(QFile::remove(sOutput));
+    EZ_TEST_BOOL(QDir().mkdir(sOutput));
+    EZ_TEST_BOOL(Call(QJsonObject{{"profile", "McpSaveTest"}}).value("isError").toBool());
+    EZ_TEST_BOOL(QDir().rmdir(sOutput));
+    EZ_TEST_BOOL(!Call(QJsonObject{{"profile", "McpSaveTest"}}).value("isError").toBool());
+    EZ_TEST_BOOL(ReadFile(sOutput) == firstOutput);
+    EZ_TEST_BOOL(ReadFile(sDdl) == ddlBefore);
+    EZ_TEST_BOOL(ReadFile(sDefault) == defaultBefore);
+    EZ_TEST_INT(pCurator->GetActiveAssetProfileIndex(), uiActive);
+
+    // Closing the project also stops its listener. Exercise the provider's closed-project guard
+    // directly, before creating any new host/project state.
+    EZ_TEST_BOOL(pCurator->DeleteAssetProfile(pProfile).Succeeded());
+    pProfile = nullptr;
+    ezToolsProject::CloseProject();
+    const ezRTTI* pType = ezRTTI::FindTypeByName("ezMcpProjectTool");
+    if (!EZ_TEST_BOOL(pType != nullptr))
+      return;
+    ezMcpToolProvider* pProvider = pType->GetAllocator()->Allocate<ezMcpToolProvider>();
+    EZ_SCOPE_EXIT(pType->GetAllocator()->Deallocate(pProvider));
+    ezMcpToolResult response;
+    ezVariantDictionary arguments;
+    arguments.Insert("profile", "Default");
+    pProvider->Execute("project_save_runtime_profile", arguments, response);
+    EZ_TEST_BOOL(response.m_bIsError);
+  }
+
+  QByteArray Request(ezUInt16 uiPort, const char* szTool, bool bDuringProgress = false, const QJsonObject& arguments = {})
   {
     QNetworkAccessManager manager;
     QNetworkRequest request(QUrl(QString("http://127.0.0.1:%1/mcp").arg(uiPort)));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    QJsonObject params{{"name", szTool}, {"arguments", QJsonObject{}}};
+    QJsonObject params{{"name", szTool}, {"arguments", arguments}};
     QJsonObject message{{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/call"}, {"params", params}};
     QNetworkReply* pReply = manager.post(request, QJsonDocument(message).toJson());
     if (bDuringProgress)

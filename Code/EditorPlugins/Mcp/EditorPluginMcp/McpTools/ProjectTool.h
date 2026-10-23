@@ -2,10 +2,7 @@
 
 #include <Mcp/McpTool.h>
 
-/// \brief Information about the project that the editor currently has open.
-///
-/// This is what orients an agent that has just connected: every path an other tool returns is
-/// relative to the data directories reported here, and asset states depend on the active profile.
+/// Project discovery, runtime profile saving and export for the editor MCP host.
 class ezMcpProjectTool : public ezMcpToolProvider
 {
   EZ_ADD_DYNAMIC_REFLECTION(ezMcpProjectTool, ezMcpToolProvider);
@@ -17,4 +14,5 @@ public:
 private:
   void ExecuteProjectInfo(const ezVariantDictionary& arguments, ezMcpToolResult& out_result);
   void ExecuteProjectExport(const ezVariantDictionary& arguments, ezMcpToolResult& out_result);
+  void ExecuteSaveRuntimeProfile(const ezVariantDictionary& arguments, ezMcpToolResult& out_result);
 };

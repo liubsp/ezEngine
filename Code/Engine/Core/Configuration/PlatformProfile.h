@@ -60,6 +60,8 @@ public:
   const ezProfileConfigData* GetTypeConfig(const ezRTTI* pRtti) const;
   ezProfileConfigData* GetTypeConfig(const ezRTTI* pRtti);
 
+  /// Writes the runtime chunks and checks file writes, including the final buffered flush.
+  /// Open failure leaves existing output untouched; a write failure may leave an incomplete file.
   ezResult SaveForRuntime(ezStringView sFile) const;
   ezResult LoadForRuntime(ezStringView sFile);
 

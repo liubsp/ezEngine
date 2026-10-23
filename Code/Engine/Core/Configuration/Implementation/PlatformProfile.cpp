@@ -4,6 +4,7 @@
 #include <Foundation/IO/ChunkStream.h>
 #include <Foundation/IO/FileSystem/FileReader.h>
 #include <Foundation/IO/FileSystem/FileWriter.h>
+#include <Foundation/IO/MemoryStream.h>
 #include <Foundation/Reflection/ReflectionUtils.h>
 
 #include <Core/ResourceManager/ResourceManager.h>
@@ -116,10 +117,11 @@ ezProfileConfigData* ezPlatformProfile::GetTypeConfig(const ezRTTI* pRtti)
 
 ezResult ezPlatformProfile::SaveForRuntime(ezStringView sFile) const
 {
-  ezFileWriter file;
-  EZ_SUCCEED_OR_RETURN(file.Open(sFile));
-
-  ezChunkStreamWriter chunk(file);
+  // Config serializers and the chunk writer do not propagate write errors. Keep their writes
+  // in memory, then check both the copy and the file writer's final buffered flush.
+  ezDefaultMemoryStreamStorage storage;
+  ezMemoryStreamWriter memory(&storage);
+  ezChunkStreamWriter chunk(memory);
 
   chunk.BeginStream(1);
 
@@ -130,7 +132,10 @@ ezResult ezPlatformProfile::SaveForRuntime(ezStringView sFile) const
 
   chunk.EndStream();
 
-  return EZ_SUCCESS;
+  ezFileWriter file;
+  EZ_SUCCEED_OR_RETURN(file.Open(sFile));
+  EZ_SUCCEED_OR_RETURN(storage.CopyToStream(file));
+  return file.Flush();
 }
 
 ezResult ezPlatformProfile::LoadForRuntime(ezStringView sFile)

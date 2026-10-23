@@ -26,6 +26,13 @@ void ezMcpProjectTool::GetSupportedTools(ezDynamicArray<ezMcpToolDesc>& out_tool
                         "the loaded plugins determine which reflected types exist.";
   desc.m_sInputSchema = R"({"type":"object","properties":{}})";
 
+  ezMcpToolDesc& save = out_tools.ExpandAndGetRef();
+  save.m_sName = "project_save_runtime_profile";
+  save.m_sDescription = "Saves one named, already-loaded asset profile to RuntimeConfigs/<name>.ezProfile in the open project. "
+                        "Does not reread external AssetProfiles.ddl edits, change the active profile or transform assets. "
+                        "Restart the editor after editing profile DDL externally. Repeating an unchanged save is safe.";
+  save.m_sInputSchema = R"({"type":"object","properties":{"profile":{"type":"string","description":"Name of a loaded asset profile, as reported by project_info."}},"required":["profile"]})";
+
   ezMcpToolDesc& exp = out_tools.ExpandAndGetRef();
   exp.m_sName = "project_export";
   exp.m_sDescription = "Exports the open project into a standalone, runnable directory - the same operation as the editor's "
@@ -57,6 +64,65 @@ void ezMcpProjectTool::Execute(ezStringView sToolName, const ezVariantDictionary
   {
     ExecuteProjectExport(arguments, out_result);
   }
+  else if (sToolName == "project_save_runtime_profile")
+  {
+    ExecuteSaveRuntimeProfile(arguments, out_result);
+  }
+}
+
+void ezMcpProjectTool::ExecuteSaveRuntimeProfile(const ezVariantDictionary& arguments, ezMcpToolResult& out_result)
+{
+  if (!ezToolsProject::IsProjectOpen())
+  {
+    out_result.SetError("No project is open.");
+    return;
+  }
+
+  ezAssetCurator* pCurator = ezAssetCurator::GetSingleton();
+  if (pCurator == nullptr)
+  {
+    out_result.SetError("The asset curator is unavailable.");
+    return;
+  }
+
+  const ezStringBuilder sRequested = ezMcpJson::GetString(arguments, "profile");
+  if (sRequested.IsEmpty())
+  {
+    out_result.SetError("A nonempty 'profile' name is required.");
+    return;
+  }
+
+  const ezUInt32 uiProfile = pCurator->FindAssetProfileByName(sRequested);
+  if (uiProfile == ezInvalidIndex)
+  {
+    out_result.SetError(ezStringBuilder("Unknown loaded asset profile '", sRequested, "'."));
+    return;
+  }
+
+  const ezPlatformProfile* pProfile = pCurator->GetAssetProfile(uiProfile);
+  const ezStringView sName = pProfile->GetConfigName();
+  // Validate the resolved name, not only the request: profile names are authored data.
+  if (sName.IsEmpty() || sName == "." || sName == ".." || ezPathUtils::ContainsInvalidFilenameChars(sName))
+  {
+    out_result.SetError("The loaded profile name must be a single valid filename component.");
+    return;
+  }
+
+  ezStringBuilder sRelativePath;
+  sRelativePath.SetFormat("RuntimeConfigs/{}.ezProfile", sName);
+  const ezStringBuilder sOutput(":project/", sRelativePath);
+  if (pProfile->SaveForRuntime(sOutput).Failed())
+  {
+    out_result.SetError(ezStringBuilder("Failed to save runtime profile '", sName, "' to '", sRelativePath, "'."));
+    return;
+  }
+
+  ezMcpJsonWriter writer;
+  writer.BeginObject();
+  writer.AddVariableString("profile", sName);
+  writer.AddVariableString("path", sRelativePath);
+  writer.EndObject();
+  out_result.m_sText = writer.GetResult();
 }
 
 void ezMcpProjectTool::ExecuteProjectInfo(const ezVariantDictionary& arguments, ezMcpToolResult& out_result)
