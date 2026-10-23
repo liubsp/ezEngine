@@ -37,10 +37,20 @@ public:
     RopeComponent,
     ClothSheetComponent,
     HeightfieldColliderComponent,
+    AuxiliaryBody,
   };
 
   ezJoltUserData() = default;
   ~ezJoltUserData() = default;
+
+  /// Identifies a component-owned body for contacts and queries without registering it for dynamic actor synchronization.
+  /// The component pointer is converted to its base type before being stored.
+  EZ_ALWAYS_INLINE void InitAuxiliaryBody(ezComponent* pComponent, ezBitflags<ezOnJoltContact> contactFlags)
+  {
+    m_Type = Type::AuxiliaryBody;
+    m_pObject = pComponent;
+    m_OnContact = contactFlags;
+  }
 
   EZ_ALWAYS_INLINE void Init(ezJoltDynamicActorComponent* pObject, ezBitflags<ezOnJoltContact> contactFlags)
   {

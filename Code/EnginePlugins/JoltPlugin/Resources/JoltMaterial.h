@@ -1,11 +1,12 @@
 #pragma once
 
 #include <Core/Physics/SurfaceResource.h>
+#include <JoltPlugin/JoltPluginDLL.h>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Collision/PhysicsMaterial.h>
 
-class ezJoltMaterial : public JPH::PhysicsMaterial
+class EZ_JOLTPLUGIN_DLL ezJoltMaterial : public JPH::PhysicsMaterial
 {
 public:
   ezJoltMaterial();
