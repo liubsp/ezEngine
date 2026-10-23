@@ -2,8 +2,20 @@
 
 Run `bash Utilities/Scripts/ProfilePersistence/test.sh` from a Linux checkout with its submodules
 initialized. It needs CMake, Ninja, a supported C++ compiler, Python 3, GNU coreutils and the UUID
-development headers (`uuid-dev` on Ubuntu). The hosted workflow uses Ubuntu 24.04 and GCC.
-No renderer, editor, display or system service is needed.
+development headers. The hosted workflow uses Ubuntu 24.04 and GCC. Install its native prerequisites
+with:
+
+```sh
+sudo apt-get install -y ninja-build uuid-dev libx11-dev libxrandr-dev \
+  libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+```
+
+Linux Foundation screen support and Core window declarations require the engine's bundled GLFW
+target, even for these non-rendering tests. The script enables its normal X11 backend; the X11
+extension packages and OpenGL headers above are compile/link prerequisites, not a renderer choice.
+Do not replace that target with system GLFW headers or disable it. Core's startup may warn that
+GLFW initialization failed when no display is available; window/input functionality is not used
+by the selected tests. No renderer, editor, display server or system service is needed.
 
 The script builds Debug FoundationTest and CoreTest under `Workspace/profile-persistence` with
 binaries under `Workspace/profile-persistence-output`. It runs profile format/loader checks and a

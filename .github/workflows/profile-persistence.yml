@@ -35,6 +35,7 @@ jobs:
       - name: Install non-rendering build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build uuid-dev
+          sudo apt-get install -y ninja-build uuid-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libgl-dev
       - name: Build and check profile persistence
         run: bash Utilities/Scripts/ProfilePersistence/test.sh
