@@ -96,65 +96,58 @@ void ezStandardJSONWriter::OutputString(ezStringView s)
 
 void ezStandardJSONWriter::OutputEscapedString(ezStringView s)
 {
-  ezStringBuilder sEscaped = s;
-  sEscaped.ReplaceAll("\\", "\\\\");
-  // sEscaped.ReplaceAll("/", "\\/"); // this is not necessary to escape
-  sEscaped.ReplaceAll("\"", "\\\"");
-  sEscaped.ReplaceAll("\b", "\\b");
-  sEscaped.ReplaceAll("\r", "\\r");
-  sEscaped.ReplaceAll("\f", "\\f");
-  sEscaped.ReplaceAll("\n", "\\n");
-  sEscaped.ReplaceAll("\t", "\\t");
-
-  // Everything below 0x20 that has no named escape has to be written as \uXXXX - JSON forbids raw
-  // control characters in a string, and parsers reject them rather than skipping them. Text coming out
-  // of a log or a user-entered string does contain them.
-  //
-  // Done last, and by rebuilding rather than with ReplaceAll, because the backslashes inserted here
-  // must not go through the escaping above a second time. Control characters are single bytes in UTF-8
-  // (continuation bytes are >= 0x80), so scanning bytes cannot cut a multi-byte character in half.
-  bool bNeedsUnicodeEscape = false;
-
-  for (ezUInt32 i = 0; i < sEscaped.GetElementCount(); ++i)
-  {
-    if (static_cast<ezUInt8>(sEscaped.GetData()[i]) < 0x20)
-    {
-      bNeedsUnicodeEscape = true;
-      break;
-    }
-  }
-
-  if (bNeedsUnicodeEscape)
-  {
-    ezStringBuilder sResult;
-    sResult.Reserve(sEscaped.GetElementCount());
-
-    const char* szCur = sEscaped.GetData();
-    const char* szEnd = szCur + sEscaped.GetElementCount();
-    const char* szChunkStart = szCur;
-
-    for (; szCur < szEnd; ++szCur)
-    {
-      const ezUInt8 uiByte = static_cast<ezUInt8>(*szCur);
-
-      if (uiByte >= 0x20)
-        continue;
-
-      sResult.Append(ezStringView(szChunkStart, szCur));
-
-      char szEscape[8];
-      ezStringUtils::snprintf(szEscape, EZ_ARRAY_SIZE(szEscape), "\\u%04x", uiByte);
-      sResult.Append(szEscape);
-
-      szChunkStart = szCur + 1;
-    }
-
-    sResult.Append(ezStringView(szChunkStart, szEnd));
-    sEscaped = sResult;
-  }
-
   OutputString("\"");
-  OutputString(sEscaped);
+
+  // Stream unchanged spans directly instead of copying and repeatedly searching the entire string.
+  // Escapes are ASCII bytes, so this scan preserves UTF-8 sequences without decoding them. Slash
+  // needs no escaping. Emitted escapes are never scanned again.
+  const char* pChunk = s.GetStartPointer();
+  const char* pEnd = s.GetEndPointer();
+  for (const char* pCur = pChunk; pCur < pEnd; ++pCur)
+  {
+    const ezUInt8 uiByte = static_cast<ezUInt8>(*pCur);
+    if (uiByte >= 0x20 && uiByte != '\\' && uiByte != '"')
+      continue;
+
+    if (pChunk < pCur)
+      OutputString(ezStringView(pChunk, pCur));
+
+    switch (uiByte)
+    {
+      case '\\':
+        OutputString("\\\\");
+        break;
+      case '"':
+        OutputString("\\\"");
+        break;
+      case '\b':
+        OutputString("\\b");
+        break;
+      case '\r':
+        OutputString("\\r");
+        break;
+      case '\f':
+        OutputString("\\f");
+        break;
+      case '\n':
+        OutputString("\\n");
+        break;
+      case '\t':
+        OutputString("\\t");
+        break;
+      default:
+      {
+        constexpr char hex[] = "0123456789abcdef";
+        const char escape[] = {'\\', 'u', '0', '0', hex[uiByte >> 4], hex[uiByte & 0xf]};
+        OutputString(ezStringView(escape, EZ_ARRAY_SIZE(escape)));
+        break;
+      }
+    }
+    pChunk = pCur + 1;
+  }
+  if (pChunk < pEnd)
+    OutputString(ezStringView(pChunk, pEnd));
+
   OutputString("\"");
 }
 

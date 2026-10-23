@@ -129,7 +129,9 @@ ezEnum<ezGALAsyncResult> ezFenceQueueVulkan::WaitForNextFence(ezTime timeout /*=
   }
 
   EZ_ASSERT_DEBUG(fenceStatus == vk::Result::eNotReady, "getFenceStatus returned {}", vk::to_string(fenceStatus).c_str());
-  if (fenceStatus == vk::Result::eNotReady && !timeout.IsZero())
+  // Traversing ready fences may exhaust the caller's budget. Nonpositive time is a poll, not a
+  // negative duration converted to an unsigned native timeout.
+  if (fenceStatus == vk::Result::eNotReady && timeout.IsPositive())
   {
     fenceStatus = m_Device.waitForFences(1, &m_PendingFences[0].m_vkFence, true, static_cast<ezUInt64>(timeout.GetNanoseconds()));
     if (fenceStatus == vk::Result::eTimeout)

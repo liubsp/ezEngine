@@ -118,8 +118,9 @@ ezEnum<ezCaptureImageResult> ezWindowOutputTargetGAL::WaitCaptureImage(ezImage& 
   if (!m_bCaptureInFlight)
     return m_bCaptureRequested ? ezCaptureImageResult::Pending : ezCaptureImageResult::NotStarted;
 
-  ezGALDevice::GetDefaultDevice()->Flush();
-  ezEnum<ezGALAsyncResult> res = m_Readback.GetReadbackResult(ezTime::MakeFromHours(1));
+  // Rendering submits the readback at EndFrame. Poll a later frame instead of flushing and
+  // waiting before present; staging storage remains owned until the fence is ready.
+  ezEnum<ezGALAsyncResult> res = m_Readback.GetReadbackResult(ezTime::MakeZero());
   if (res == ezGALAsyncResult::Pending)
     return ezCaptureImageResult::Pending;
 

@@ -334,9 +334,43 @@ EZ_CREATE_SIMPLE_TEST(IO, StandardJSONWriter)
                                  "b");
     js.AddVariableString("var2", ezStringView("a\0b", 3));
 
-    // The backslash is escaped once, by the pass that runs before this one - the \uXXXX sequence must
-    // not be fed through it again.
+    // A caller's backslash and the following control byte are escaped independently.
     js.AddVariableString("var3", "\\\x01");
+  }
+
+  EZ_TEST_BLOCK(ezTestBlock::Enabled, "All control bytes and UTF-8 spans")
+  {
+    StreamComparer sc("\"value\" : \"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007"
+                      "\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f"
+                      "\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017"
+                      "\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f"
+                      " /\xc3\xa9\\\"\xe2\x82\xac\\\\\xf0\x9f\x98\x80\",\n\"empty\" : \"\"");
+    constexpr char suffix[] = " /\xc3\xa9\"\xe2\x82\xac\\\xf0\x9f\x98\x80";
+    char text[32 + EZ_ARRAY_SIZE(suffix) - 1];
+    for (ezUInt32 i = 0; i < 32; ++i)
+      text[i] = static_cast<char>(i);
+    ezMemoryUtils::Copy(text + 32, suffix, EZ_ARRAY_SIZE(suffix) - 1);
+
+    ezStandardJSONWriter js;
+    js.SetOutputStream(&sc);
+    js.AddVariableString("value", ezStringView(text, 32 + EZ_ARRAY_SIZE(suffix) - 1));
+    js.AddVariableString("empty", ezStringView());
+  }
+
+  EZ_TEST_BLOCK(ezTestBlock::Enabled, "Large unescaped span between escapes")
+  {
+    // Representative of base64 nested in an MCP text result. Quotes must not cause repeated
+    // rebuilding of the large unchanged span, and slash remains unchanged on the wire.
+    ezDynamicArray<char> bytes;
+    bytes.SetCountUninitialized(1024 * 1024);
+    ezMemoryUtils::PatternFill(bytes.GetData(), '/', bytes.GetCount());
+    const ezStringView sSpan(bytes.GetData(), bytes.GetCount());
+    ezStringBuilder sText("\"", sSpan, "\n");
+    ezStringBuilder sExpected("\"text\" : \"\\\"", sSpan, "\\n\"");
+    StreamComparer sc(sExpected.GetData());
+    ezStandardJSONWriter js;
+    js.SetOutputStream(&sc);
+    js.AddVariableString("text", sText);
   }
 
   EZ_TEST_BLOCK(ezTestBlock::Enabled, "AddVariableRawJson")
