@@ -108,7 +108,8 @@ void ezJoltContactListener::OnContact(const JPH::Body& body0, const JPH::Body& b
     }
 
     ref_settings.mCombinedRestitution = ezMath::Max(fRes0, fRes1);
-    ref_settings.mCombinedFriction = ezMath::Sqrt(fFri0 * fFri1);
+    // The geometric mean fits in float for finite nonnegative inputs, but their product may not.
+    ref_settings.mCombinedFriction = float(ezMath::Sqrt(double(fFri0) * double(fFri1)));
   }
 
   m_ContactEvents.m_pWorld = m_pWorld;
